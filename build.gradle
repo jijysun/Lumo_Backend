@@ -28,10 +28,10 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator' // prometheus, blue-green checking
 	implementation 'org.springframework.boot:spring-boot-starter'
 
-	// swagger
-	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.15'
-	implementation 'org.apache.commons:commons-lang3:3.18.0' // springdoc의 의존 라이브러리. 이전 버전 취약성 문제
-	implementation 'io.swagger.core.v3:swagger-annotations:2.2.38' // openai 의존성 충돌 해결
+	// swagger — 프로젝트 경량화를 위해 제거 (20260813). 되살릴 때 3줄 모두 해제할 것.
+	// implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.15'
+	// implementation 'org.apache.commons:commons-lang3:3.18.0' // springdoc의 의존 라이브러리. 이전 버전 취약성 문제
+	// implementation 'io.swagger.core.v3:swagger-annotations:2.2.38' // openai 의존성 충돌 해결
 
 	// jwt
 	implementation 'io.jsonwebtoken:jjwt-api:0.12.5'

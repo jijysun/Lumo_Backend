@@ -37,7 +37,8 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests((auth) -> {
                     auth
-                            .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                            // swagger 제거로 주석 처리 (20260813)
+                            // .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                             .requestMatchers("/api/alarms/**").authenticated()
                             .requestMatchers("/api/missions/**").authenticated()
                             .requestMatchers("/api/members/me/**").authenticated()

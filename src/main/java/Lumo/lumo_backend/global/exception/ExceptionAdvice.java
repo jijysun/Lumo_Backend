@@ -7,7 +7,9 @@ import Lumo.lumo_backend.global.apiResponse.status.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
-import org.jspecify.annotations.Nullable;
+// jspecify 는 springdoc 을 통해 전이 의존으로 들어오던 라이브러리다.
+// swagger 제거 시 컴파일이 깨져 함께 주석 처리한다 (20260813).
+// import org.jspecify.annotations.Nullable;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -48,7 +50,8 @@ public class ExceptionAdvice extends ResponseEntityExceptionHandler {
     }
 
     @Override
-    protected @Nullable ResponseEntity<Object> handleTypeMismatch(TypeMismatchException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+    // @Nullable 제거 — 아래 handleMethodArgumentNotValid 등 다른 오버라이드와도 표기가 일치한다.
+    protected ResponseEntity<Object> handleTypeMismatch(TypeMismatchException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         APIResponse<Object> body = APIResponse.onFailure("TYPE_MISMATCH", "형식이 올바르지 않습니다.", null);
         return super.handleExceptionInternal(ex, body, headers, status, request);
     }

@@ -2,7 +2,7 @@ package Lumo.lumo_backend.domain.setting.dto;
 
 import Lumo.lumo_backend.domain.setting.entity.Feedback;
 import Lumo.lumo_backend.domain.setting.entity.Feedback;
-import io.swagger.v3.oas.annotations.media.Schema;
+// import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 
 import java.util.List;
@@ -12,9 +12,9 @@ import java.util.stream.Collectors;
 @AllArgsConstructor
 public class FeedbackResDTO {
 
-    @Schema(
-            description = "피드백 리스트"
-    )
+    // @Schema(
+            // description = "피드백 리스트"
+    // )
     private List<FeedbackDTO> feedbackList;
 
 

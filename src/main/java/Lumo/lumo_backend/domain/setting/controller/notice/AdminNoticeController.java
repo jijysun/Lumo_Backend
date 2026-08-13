@@ -10,8 +10,8 @@ import Lumo.lumo_backend.global.apiResponse.APIResponse;
 import Lumo.lumo_backend.global.apiResponse.status.ErrorCode;
 import Lumo.lumo_backend.global.exception.GeneralException;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
+// import io.swagger.v3.oas.annotations.Operation;
+// import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,12 +22,12 @@ import org.springframework.web.bind.annotation.*;
 @Slf4j
 @RequiredArgsConstructor
 @RequestMapping("/api/admin/notices")
-@Tag(name = "공지사항 관리", description = "관리자 계정 로그인 필요")
+// @Tag(name = "공지사항 관리", description = "관리자 계정 로그인 필요")
 public class AdminNoticeController {
 
     private final NoticeService noticeService;
 
-    @Operation(summary = "공지사항 생성")
+    // @Operation(summary = "공지사항 생성")
     @PostMapping
     public APIResponse<NoticeResponseDTO> createNotice(
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
@@ -38,7 +38,7 @@ public class AdminNoticeController {
         return APIResponse.onSuccess(noticeResponseDTO, SettingSuccessCode.NOTICE_CREATE_SUCCESS);
     }
 
-    @Operation(summary = "공지사항 수정")
+    // @Operation(summary = "공지사항 수정")
     @PatchMapping("/{noticeId}")
     public APIResponse<NoticeResponseDTO> updateNotice(
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
@@ -51,7 +51,7 @@ public class AdminNoticeController {
     }
 
 
-    @Operation(summary = "공지사항 삭제")
+    // @Operation(summary = "공지사항 삭제")
     @DeleteMapping("/{noticeId}")
     public APIResponse<Void> deleteNotice(
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
