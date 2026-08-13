@@ -1,7 +1,10 @@
+# 이미지 태그는 .env 또는 셸 환경변수로 지정한다.
+#   예) LUMO_TAG=ctrl-7a28965 docker compose up -d Blue
+#   미지정 시 latest 로 동작하므로 기존 배포 흐름과 호환된다.
 services:
   Blue:
     build: .
-    image: jijysun/lumo:latest
+    image: ${LUMO_IMAGE:-jijysun/lumo}:${LUMO_TAG:-latest}
     container_name: Lumo_Blue
     ports:
       - "8081:8080"
@@ -14,7 +17,7 @@ services:
 
   Green:
     build: .
-    image: jijysun/lumo:latest
+    image: ${LUMO_IMAGE:-jijysun/lumo}:${LUMO_TAG:-latest}
     container_name: Lumo_Green
     ports:
       - "8082:8080"

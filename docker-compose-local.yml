@@ -6,8 +6,6 @@ services:
     build: .
     image: jijysun/lumo:latest
     container_name: Lumo_Blue
-    depends_on:
-      - mysql-local
     ports:
       - "8081:8080"
     environment:
@@ -15,7 +13,13 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:mysql://mysql-local:3306/lumo_test?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
       - SPRING_DATASOURCE_USERNAME=root
       - SPRING_DATASOURCE_PASSWORD=password
+      # application.yaml 의 spring.mail.port 가 587 로 하드코딩되어 있어 여기서 덮어쓴다.
+      - SPRING_MAIL_HOST=mailpit
+      - SPRING_MAIL_PORT=1025
     env_file: .env
+    depends_on:
+      - mysql-local
+      - mailpit
     networks:
       - lumo-test-network
     restart: on-failure
@@ -40,10 +44,17 @@ services:
     networks:
       - lumo-test-network
 
-  # Mail: Mailhog (테스트의 핵심)
-  mailhog:
-    image: mailhog/mailhog:latest
-    container_name: Lumo_Mailhog
+  # Mail: Mailpit (테스트의 핵심)
+  # MailHog 는 2020 년 이후 유지보수가 중단되어 Mailpit 으로 교체.
+  # 포트(1025/8025)와 API 가 호환되는 드롭인 대체재다.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: Lumo_Mailpit
+    environment:
+      # MailHog 와 달리 Mailpit 은 기본적으로 SMTP AUTH 를 거부한다.
+      # 앱이 username/password 를 들고 접속하므로 아무 자격증명이나 수락하도록 연다.
+      - MP_SMTP_AUTH_ACCEPT_ANY=true
+      - MP_SMTP_AUTH_ALLOW_INSECURE=true
     ports:
       - "1025:1025" # SMTP
       - "8025:8025" # UI
