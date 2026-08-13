@@ -55,6 +55,8 @@ services:
       # 앱이 username/password 를 들고 접속하므로 아무 자격증명이나 수락하도록 연다.
       - MP_SMTP_AUTH_ACCEPT_ANY=true
       - MP_SMTP_AUTH_ALLOW_INSECURE=true
+      # 기본 보관 상한 500 통. 부하 테스트에서 수신 건수를 세려면 무제한이어야 한다.
+      - MP_MAX_MESSAGES=0
     ports:
       - "1025:1025" # SMTP
       - "8025:8025" # UI
