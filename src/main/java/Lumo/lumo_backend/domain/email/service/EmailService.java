@@ -34,9 +34,10 @@ public class EmailService {
                 if (task != null) {
                     String[] data = task.split(":");
                     sendEmail(data[0], data[1]);
-                }if (task == null && workerId == 0) {
-                    log.info("[EmailService] (worker {}) - no email to send!",  workerId);
                 }
+                /*if (task == null && workerId == 0) {
+                    log.info("[EmailService] (worker {}) - no email to send!",  workerId);
+                }*/
             } catch (Exception e) {
                 log.error("[EmailService] - EmailWorker {} Error, retry after 1s... ", workerId, e);
                 try {
@@ -169,6 +170,6 @@ public class EmailService {
             throw new RuntimeException(e);
         }
 
-        log.info("[EmailService - requestVerificationCode] saved code {} to {}", redisTemplate.opsForValue().get(email), email);
+//        log.info("[EmailService - requestVerificationCode] saved code {} to {}", redisTemplate.opsForValue().get(email), email);
     }
 }
