@@ -42,7 +42,7 @@ jobs:
           host: ${{secrets.EC2_HOST}}
           username: ${{secrets.EC2_USERNAME}}
           key: ${{secrets.EC2_PRIVATE_KEY}}
-          source: "docker-compose.yml, deploy.sh, monitoring/*"
+          source: "docker-compose.yml, scripts/deploy.sh, monitoring/*"
           target: "~/lumo"
 
   ec2-deploy:
@@ -75,5 +75,5 @@ jobs:
             sudo docker login -u ${{secrets.DOCKER_USERNAME}} -p ${{secrets.DOCKER_PASSWORD}}
             sudo docker compose pull
             
-            chmod +x deploy.sh
-            sudo bash ./deploy.sh 2>&1 | sudo tee deploy.log
+            chmod +x scripts/deploy.sh
+            sudo bash ./scripts/deploy.sh 2>&1 | sudo tee deploy.log
