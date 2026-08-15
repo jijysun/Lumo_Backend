@@ -54,3 +54,14 @@ management:
 jwt:
   secret:
     key: ${JWT_SECRET_KEY}
+
+# 부하 테스트용 회원 시딩 (LoadTestUserSeeder)
+# enabled=true 일 때만 빈이 등록된다. 기본값 false 이므로 평상시 배포에는 영향 없음.
+# .env 는 배포마다 workflow 가 덮어쓰므로 측정 회차 변수는 셸 환경변수로 주입할 것.
+#   LOADTEST_SEED_ENABLED=true LOADTEST_SEED_USER_COUNT=500 sudo -E docker compose up -d Blue
+loadtest:
+  seed:
+    enabled: ${LOADTEST_SEED_ENABLED:false}
+    user-count: ${LOADTEST_SEED_USER_COUNT:0}
+    email-domain: ${LOADTEST_SEED_EMAIL_DOMAIN:loadtest.invalid}
+    password: ${LOADTEST_SEED_PASSWORD:loadtest1234!}
