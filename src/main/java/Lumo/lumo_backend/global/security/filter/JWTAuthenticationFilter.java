@@ -54,12 +54,13 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                 Authentication authentication = jwtProvider.getAuthentication(accessToken);
                 if (authentication != null) {
                     SecurityContextHolder.getContext().setAuthentication(authentication);
-                } else {
-                    log.info("[JWTAuthenticationFilter] - Invalid Token, Dont save authentication!");
                 }
+                /*else {
+                    log.info("[JWTAuthenticationFilter] - Invalid Token, Dont save authentication!");
+                }*/
             }
             else {
-                log.warn("[JWTAuthenticationFilter] - This is request with Empty or Invalid Token");
+//                log.warn("[JWTAuthenticationFilter] - This is request with Empty or Invalid Token");
 //            throw new GeneralException(ErrorCode.AUTH_UNAUTHORIZED);
             }
         }
