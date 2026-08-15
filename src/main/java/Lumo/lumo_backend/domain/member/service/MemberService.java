@@ -69,10 +69,10 @@ public class MemberService {
     public Boolean checkEmailDuplicate(String email) {
         Optional<Member> byEmail = memberRepository.findByEmail(email);
         if (byEmail.isPresent()) {
-            log.info("[MemberService - checkEmailDuplicate] duplicate email {}", email);
+//            log.info("[MemberService - checkEmailDuplicate] duplicate email {}", email);
             throw new MemberException(MemberErrorCode.EXIST_MEMBER);
         } else {
-            log.info("[MemberService - checkEmailDuplicate] Success to check duplicate {}", email);
+//            log.info("[MemberService - checkEmailDuplicate] Success to check duplicate {}", email);
             return true;
         }
     }
@@ -82,12 +82,12 @@ public class MemberService {
         Boolean ifAbsent = redisTemplate.opsForValue().setIfAbsent(email, code, Duration.ofMinutes(3));
 
         if (Boolean.FALSE.equals(ifAbsent)){
-            log.info("[MemberService - requestVerificationCode] already send to {} with {}", email, redisTemplate.opsForValue().get(email));
+//            log.info("[MemberService - requestVerificationCode] already send to {} with {}", email, redisTemplate.opsForValue().get(email));
             throw new MemberException(MemberErrorCode.ALREADY_SEND); // 따닥 방지
         }
         else{
             redisTemplate.opsForList().leftPush("email_queue", email + ":" + code);
-            log.info("[MemberService - requestVerificationCode] call EmailService with {} - {}", email, code);
+//            log.info("[MemberService - requestVerificationCode] call EmailService with {} - {}", email, code);
 //            emailService.startWork();
         }
     }
@@ -113,7 +113,7 @@ public class MemberService {
         } else if (!savedCode.equals(code)) {
             throw new MemberException(MemberErrorCode.WRONG_CODE);
         }
-        log.info("[MemberService - verifyCode] Success to verify code {} to {}", savedCode, email);
+//        log.info("[MemberService - verifyCode] Success to verify code {} to {}", savedCode, email);
     }
 
     public void signIn(MemberReqDTO.SignInRequestDTO dto) {
@@ -125,7 +125,7 @@ public class MemberService {
 
         memberRepository.save(Member.create(dto.getEmail(), dto.getUsername(), encoder.encode(dto.getPassword()), Login.NORMAL, MemberRole.USER));
 
-        log.info("[MemberService - signIn] Success to signIn -> {}, {}", dto.getEmail(), dto.getUsername());
+//        log.info("[MemberService - signIn] Success to signIn -> {}, {}", dto.getEmail(), dto.getUsername());
     }
 
     public MemberRespDTO.MemberInfoDTO login(MemberReqDTO.LoginReqDTO dto) {
@@ -140,8 +140,7 @@ public class MemberService {
 
         redisTemplate.opsForValue().set("refresh:"+dto.getEmail(), jwt.getRefreshToken());
 
-        log.info("[MemberService - login] Success to login -> {} - {}", dto.getEmail(), jwt.getRefreshToken());
-
+//        log.info("[MemberService - login] Success to login -> {} - {}", dto.getEmail(), jwt.getRefreshToken());
 
         return MemberRespDTO.MemberInfoDTO.builder().jwt(jwt).username(member.getUsername()).build();
     }
