@@ -3,7 +3,7 @@
 #   미지정 시 latest 로 동작하므로 기존 배포 흐름과 호환된다.
 services:
   Blue:
-    build: .
+    # build 지시자를 두지 않는다 — EC2 에는 소스가 없고(scp 대상은 compose·deploy.sh·monitoring 뿐),
     image: ${LUMO_IMAGE:-jijysun/lumo}:${LUMO_TAG:-latest}
     container_name: Lumo_Blue
     ports:
@@ -21,7 +21,7 @@ services:
     restart: on-failure
 
   Green:
-    build: .
+    # Blue 와 동일 — 이미지는 pull 만
     image: ${LUMO_IMAGE:-jijysun/lumo}:${LUMO_TAG:-latest}
     container_name: Lumo_Green
     ports:

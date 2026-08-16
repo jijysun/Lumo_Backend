@@ -52,7 +52,10 @@ sudo docker compose stop ${BEFORE_COLOR}
 echo ">>> Removing previous container (${BEFORE_COLOR})..."
 sudo docker compose rm -f ${BEFORE_COLOR}
 
-echo ">>> Cleaning up unused images..."
-sudo docker image prune -af
+echo ">>> Cleaning up dangling images..."
+# -a 를 쓰지 않는다. -af 는 "컨테이너가 참조하지 않는 모든 이미지"를 지우므로
+# 직전 버전과 대조군(:<커밋SHA>) 태그까지 전부 날아가 롤백·재현 배포가 불가능해진다.
+# -f 는 태그 없는(dangling) 레이어만 정리한다.
+sudo docker image prune -f
 
 echo ">>> Deploy Success :) !!!!!!!!!!!!!!!!!!!"

@@ -1,28 +1,56 @@
+# =====================================================================
+# main 푸시 → 멀티아키(amd64+arm64) 이미지 빌드·푸시 → EC2 블루-그린 배포
+# ---------------------------------------------------------------------
+# 필요한 GitHub Secrets
+#   DOCKER_USERNAME / DOCKER_PASSWORD : Docker Hub
+#   EC2_HOST / EC2_USERNAME / EC2_PRIVATE_KEY
+#   MYSQL_* / MAIL_SENDER_* / REDIS_* / JWT_SECRET_KEY / OPENAI_API_KEY
+#
+# 대조군 재현 배포
+#   Actions > 이 워크플로 > Run workflow > ref 에 커밋 SHA 입력 (예: 7a28965)
+#   → main 은 건드리지 않고 그 시점 코드로만 이미지를 구워 배포한다.
+# =====================================================================
 name: Lumo-Deploy
+
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: >
+          빌드·배포할 커밋 SHA / 브랜치 / 태그. 비워두면 트리거한 브랜치 그대로.
+          대조군 재현 배포일 때만 채운다.
+        required: false
+        default: ''
 
 jobs:
   build-and-push-to-docker:
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.resolve.outputs.sha }}
+
     steps:
       - name: checking repo...
         uses: actions/checkout@v4
-
-      - uses: actions/checkout@v4
-      - name: setting jdk...
-        uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'gradle' # 캐싱
+          ref: ${{ inputs.ref || github.sha }}
 
-      - name: build with gradle # 배포 전 빌드 테스팅
-        run: |
-          chmod +x ./gradlew
-          ./gradlew clean build -x test 
+      # workflow_dispatch 로 과거 커밋을 지정하면 github.sha 는 "트리거한 브랜치의 최신 커밋"을
+      # 가리켜 실제 체크아웃된 코드와 어긋난다. 이미지 태그는 반드시 HEAD 기준으로 다시 구한다.
+      - name: resolve checked-out sha
+        id: resolve
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # t4g.xlarge(Graviton, arm64) 타깃 빌드용.
+      # Dockerfile 의 빌더 스테이지는 $BUILDPLATFORM 에 고정되어 있어 Gradle 컴파일 자체는
+      # 에뮬레이션을 타지 않는다. QEMU 는 런타임 스테이지(JRE 레이어)에만 쓰인다.
+      - name: setup qemu...
+        uses: docker/setup-qemu-action@v3
+
+      - name: setup buildx...
+        uses: docker/setup-buildx-action@v3
 
       - name: logging in docker...
         uses: docker/login-action@v3
@@ -30,13 +58,42 @@ jobs:
           username: ${{secrets.DOCKER_USERNAME}}
           password: ${{secrets.DOCKER_PASSWORD}}
 
-      - name: build docker and push image..
+      # 수동 ref 빌드는 :latest 를 절대 건드리지 않는다.
+      # :latest 가 과거(개선 전) 코드를 가리키면 이후 자동 배포가 그걸 운영에 올릴 수 있다.
+      - name: determine tags
+        id: tags
         run: |
-          chmod +x ./gradlew 
-          docker build -t ${{secrets.DOCKER_USERNAME}}/lumo .
-          docker push ${{secrets.DOCKER_USERNAME}}/lumo
+          IMAGE="${{ secrets.DOCKER_USERNAME }}/lumo"
+          SHA="${{ steps.resolve.outputs.sha }}"
+          if [ -z "${{ inputs.ref }}" ]; then
+            echo "tags=${IMAGE}:latest,${IMAGE}:${SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${IMAGE}:${SHA}" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: copy docker-compose and env...
+      # 러너에서 별도로 ./gradlew build 를 돌리지 않는다 — Dockerfile 빌더 스테이지가
+      # 같은 컴파일을 한 번 더 하므로 중복이었다. 컴파일 오류는 이 스텝에서 그대로 잡힌다.
+      - name: build docker and push image..
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  ec2-deploy:
+    needs: build-and-push-to-docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checking repo...
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: copy compose, deploy script, monitoring...
         uses: appleboy/scp-action@master
         with:
           host: ${{secrets.EC2_HOST}}
@@ -45,10 +102,6 @@ jobs:
           source: "docker-compose.yml, scripts/deploy.sh, monitoring/*"
           target: "~/lumo"
 
-  ec2-deploy:
-    needs: build-and-push-to-docker
-    runs-on: ubuntu-latest
-    steps:
       - name: working in ec2...
         uses: appleboy/ssh-action@master
         with:
@@ -56,24 +109,38 @@ jobs:
           username: ${{secrets.EC2_USERNAME}}
           key: ${{secrets.EC2_PRIVATE_KEY}}
           script: |
+            set -e
             mkdir -p ~/lumo
             cd ~/lumo
-            
-            echo "MYSQL_HOST=${{secrets.MYSQL_HOST}}" > .env 
-            echo "MYSQL_NAME=${{secrets.MYSQL_NAME}}" >> .env
-            echo "MYSQL_PORT=${{secrets.MYSQL_PORT}}" >> .env
-            echo "MYSQL_USERNAME=${{secrets.MYSQL_USERNAME}}" >> .env
-            echo "MYSQL_PASSWORD=${{secrets.MYSQL_PASSWORD}}" >> .env
-            echo "MAIL_SENDER_HOST=${{secrets.MAIL_SENDER_HOST}}" >> .env
-            echo "MAIL_SENDER_USERNAME=${{secrets.MAIL_SENDER_USERNAME}}" >> .env
-            echo "MAIL_SENDER_PASSWORD=${{secrets.MAIL_SENDER_PASSWORD}}" >> .env
-            echo "REDIS_HOST=${{secrets.REDIS_HOST}}" >> .env
-            echo "REDIS_PORT=${{secrets.REDIS_PORT}}" >> .env
-            echo "JWT_SECRET_KEY=${{secrets.JWT_SECRET_KEY}}" >> .env
-            echo "OPENAI_API_KEY=${{secrets.OPENAI_API_KEY}}" >> .env
-            
-            sudo docker login -u ${{secrets.DOCKER_USERNAME}} -p ${{secrets.DOCKER_PASSWORD}}
+
+            cat > .env <<'LUMO_ENV_EOF'
+            MYSQL_HOST=${{secrets.MYSQL_HOST}}
+            MYSQL_NAME=${{secrets.MYSQL_NAME}}
+            MYSQL_PORT=${{secrets.MYSQL_PORT}}
+            MYSQL_USERNAME=${{secrets.MYSQL_USERNAME}}
+            MYSQL_PASSWORD=${{secrets.MYSQL_PASSWORD}}
+            MAIL_SENDER_HOST=${{secrets.MAIL_SENDER_HOST}}
+            MAIL_SENDER_USERNAME=${{secrets.MAIL_SENDER_USERNAME}}
+            MAIL_SENDER_PASSWORD=${{secrets.MAIL_SENDER_PASSWORD}}
+            REDIS_HOST=${{secrets.REDIS_HOST}}
+            REDIS_PORT=${{secrets.REDIS_PORT}}
+            JWT_SECRET_KEY=${{secrets.JWT_SECRET_KEY}}
+            OPENAI_API_KEY=${{secrets.OPENAI_API_KEY}}
+            LUMO_IMAGE=${{secrets.DOCKER_USERNAME}}/lumo
+            LUMO_ENV_EOF
+
+            # 빌드 잡이 실제로 태그한 커밋 이미지를 compose 가 쓰도록 주입한다.
+            # 이 한 줄이 없으면 SHA 태그를 만들어도 compose 는 항상 latest 를 띄운다.
+            echo "LUMO_TAG=${{ needs.build-and-push-to-docker.outputs.image_tag }}" >> .env
+
+            # 시크릿 오타·누락은 런타임에야 드러나므로 여기서 먼저 걸러낸다.
+            for k in MYSQL_HOST MYSQL_NAME MYSQL_USERNAME MYSQL_PASSWORD REDIS_HOST REDIS_PORT JWT_SECRET_KEY; do
+              grep -q "^${k}=." .env || { echo ">>> .env 의 ${k} 가 비어 있습니다. GitHub Secrets 확인 필요"; exit 1; }
+            done
+
+            # docker login -p 는 비밀번호가 프로세스 목록(ps aux)과 셸 히스토리에 남는다.
+            echo "${{secrets.DOCKER_PASSWORD}}" | sudo docker login -u "${{secrets.DOCKER_USERNAME}}" --password-stdin
             sudo docker compose pull
-            
+
             chmod +x scripts/deploy.sh
             sudo bash ./scripts/deploy.sh 2>&1 | sudo tee deploy.log
