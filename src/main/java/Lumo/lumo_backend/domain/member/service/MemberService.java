@@ -50,6 +50,10 @@ public class MemberService {
     private static final String CHARACTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final int CODE_LENGTH = 4;
 
+    /** 이메일 인증 성공 티켓. signIn / changePassword 가 1회 소비한다 (C-2). */
+    private static final String VERIFIED_KEY_PREFIX = "verified:";
+    private static final Duration VERIFIED_TTL = Duration.ofMinutes(10);
+
 
     public MemberRespDTO.GetLoginDTO getLogin(Member member) {
 
@@ -113,10 +117,34 @@ public class MemberService {
         } else if (!savedCode.equals(code)) {
             throw new MemberException(MemberErrorCode.WRONG_CODE);
         }
-//        log.info("[MemberService - verifyCode] Success to verify code {} to {}", savedCode, email);
+
+        // 검증에 쓴 코드는 즉시 폐기한다.
+        // 남겨두면 3분 TTL 이 끝날 때까지 같은 코드로 무제한 재검증이 가능했다.
+        redisTemplate.delete(email);
+
+        // 인증에 성공했다는 사실을 티켓으로 남긴다. signIn / changePassword 가 이 티켓을 소비한다.
+        // 이전에는 성공 사실을 어디에도 저장하지 않아 verify-code 를 건너뛰고 바로 signIn 을 호출해도 가입이 됐다.
+        redisTemplate.opsForValue().set(VERIFIED_KEY_PREFIX + email, "true", VERIFIED_TTL);
+    }
+
+    /**
+     * 이메일 인증 티켓을 소비한다(1회용).
+     *
+     * <p>Redis {@code DEL} 은 "키가 있었으면 1, 없었으면 0"을 반환하므로 확인과 소비가 한 번의 원자적
+     * 커맨드로 끝난다. get→delete 로 나누면 두 요청이 같은 티켓을 동시에 통과할 수 있다.
+     */
+    private void consumeVerification(String email) {
+        Boolean consumed = redisTemplate.delete(VERIFIED_KEY_PREFIX + email);
+
+        if (!Boolean.TRUE.equals(consumed)) {
+            throw new MemberException(MemberErrorCode.EMAIL_NOT_VERIFIED);
+        }
     }
 
     public void signIn(MemberReqDTO.SignInRequestDTO dto) {
+        // 이메일 인증을 통과한 요청만 가입시킨다 (C-2).
+        consumeVerification(dto.getEmail());
+
         Optional<Member> byEmail = memberRepository.findByEmail(dto.getEmail());
 
         if (byEmail.isPresent()) {
@@ -202,6 +230,10 @@ public class MemberService {
 
     @Transactional
     public MemberRespDTO.SimpleAPIRespDTO changePassword(String email, String newPassword) {
+        // 이 엔드포인트는 "로그인할 수 없는 사용자"가 쓰므로 SecurityConfig 에서 permitAll 로 열려 있다.
+        // 따라서 이메일 인증 티켓이 유일한 방어선이다 — 없으면 이메일만 알아도 비밀번호가 바뀐다 (C-1·C-2).
+        consumeVerification(email);
+
         Member member = memberRepository.findByEmail(email).orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
 
         String encode = encoder.encode(newPassword);

@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# 헬스체크가 응답 JSON 의 최상위 status 만 보도록 jq 로 파싱한다 (C-5).
+# 없으면 조용히 잘못된 판정을 하느니 즉시 멈추는 편이 낫다.
+if ! command -v jq >/dev/null 2>&1; then
+        echo ">>> jq 가 필요합니다. 설치 후 다시 실행하세요: sudo apt-get update && sudo apt-get install -y jq"
+        exit 1
+fi
+
 echo ">>> Updating Monitoring Tools ..."
 sudo docker compose restart promtail loki prometheus grafana
 
@@ -24,13 +34,22 @@ echo "${TARGET_PORT} -> Try Health Check.."
 for retry_cnt in {1..10}
 do
         echo ">>> Health check try ${retry_cnt}.."
-        RESPONSE=$(curl -s http://localhost:${TARGET_PORT}/actuator/health)
-        UP_COUNT=$(echo $RESPONSE | grep 'UP' | wc -l)
 
-        if [ $UP_COUNT -ge 1 ]; then
-                echo ">>> Health check Success!"
+        # 최상위 status 만 본다.
+        # application.yaml 이 show-details: always 라 응답에 컴포넌트별 status 가 전부 실린다.
+        #   {"status":"DOWN","components":{"db":{"status":"DOWN"},"diskSpace":{"status":"UP"},...}}
+        # 예전 방식(grep 'UP' | wc -l)은 최상위가 DOWN 이어도 diskSpace/ping 의 UP 에 걸려 통과했고,
+        # 그 결과 DB 에 못 붙은 컨테이너로 nginx 트래픽이 전환될 수 있었다.
+        # 응답이 없거나 JSON 이 아니면 jq 가 빈 문자열을 내도록 // empty 와 2>/dev/null 로 방어한다.
+        STATUS=$(curl -s --max-time 5 "http://localhost:${TARGET_PORT}/actuator/health" \
+                | jq -r '.status // empty' 2>/dev/null)
+
+        if [ "${STATUS}" = "UP" ]; then
+                echo ">>> Health check Success! (status=UP)"
                 break
         fi
+
+        echo ">>> not ready yet (status=${STATUS:-no-response})"
 
         if [ $retry_cnt -eq 10 ]; then
             echo ">>> Health check FAILED, Stop Deploying..."

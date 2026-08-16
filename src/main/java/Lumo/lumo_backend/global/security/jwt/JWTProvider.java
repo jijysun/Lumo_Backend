@@ -1,6 +1,7 @@
 package Lumo.lumo_backend.global.security.jwt;
 
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetailsService;
+import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 import io.jsonwebtoken.security.SecurityException;
 import lombok.extern.slf4j.Slf4j;
@@ -30,9 +31,35 @@ public class JWTProvider {
     private final CustomUserDetailsService customUserDetailsService;
 
 
+    /** HS256 최소 키 길이. RFC 7518 §3.2 — 키는 해시 출력 길이(256bit) 이상이어야 한다. */
+    private static final int MIN_KEY_BYTES = 32;
+
     public JWTProvider(@Value("${jwt.secret.key}") String key, CustomUserDetailsService customUserDetailsService) {
-        byte[] encodeKey = Base64.getEncoder().encode(key.getBytes());
-        this.key = Keys.hmacShaKeyFor(encodeKey);
+        /*
+         * (20260816 C-4 수정) Base64 "인코딩" → "디코딩".
+         *
+         * 이전 코드는 Base64.getEncoder().encode(key.getBytes()) 였다.
+         * 인코딩은 엔트로피를 늘리지 않고 길이만 4/3배로 부풀린다. 원문이 24바이트(192bit)여도
+         * 인코딩 후 32바이트가 되어 Keys.hmacShaKeyFor() 의 최소 길이 검증을 "형식적으로" 통과했고,
+         * 실제 키 강도는 192bit 그대로였다. 즉 약한 키 검증을 스스로 우회하는 코드였다.
+         *
+         * jjwt 가 문서화한 사용법은 Decoders.BASE64.decode(secret) 이다.
+         * → 시크릿을 Base64 문자열로 보관하고 원래 바이트로 되돌려 쓴다.
+         *
+         * ⚠️ JWT_SECRET_KEY 는 반드시 "32바이트 이상 난수의 Base64 문자열"이어야 한다.
+         *    생성: openssl rand -base64 32
+         */
+        byte[] keyBytes = Decoders.BASE64.decode(key);
+
+        // hmacShaKeyFor 의 WeakKeyException 메시지만으로는 원인을 알기 어려워 먼저 걸러낸다.
+        if (keyBytes.length < MIN_KEY_BYTES) {
+            throw new IllegalStateException(
+                    "jwt.secret.key 는 Base64 디코딩 후 " + MIN_KEY_BYTES + "바이트(256bit) 이상이어야 합니다. "
+                            + "현재 " + keyBytes.length + "바이트(" + (keyBytes.length * 8) + "bit). "
+                            + "생성 방법: openssl rand -base64 32");
+        }
+
+        this.key = Keys.hmacShaKeyFor(keyBytes);
         this.customUserDetailsService = customUserDetailsService; // 커스텀 UserDetailsService 를 통한 DB 조회
     }
 

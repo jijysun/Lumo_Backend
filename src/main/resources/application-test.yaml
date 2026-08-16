@@ -51,4 +51,8 @@ management:
 
 jwt:
   secret:
-    key: aksdbfkahskdjfhaks
+    # 로컬 test 프로파일 전용 더미 키 (운영 키 아님).
+    # C-4 수정으로 이 값은 Base64 "디코딩" 되므로, 디코딩 후 32바이트(256bit) 이상이어야 한다.
+    # 이전 값 'aksdbfkahskdjfhaks'(18바이트)는 규격 미달이라 기동 자체가 실패했다 (M-17).
+    # 운영 키 생성: openssl rand -base64 32
+    key: bHVtby1sb2NhbC10ZXN0LXNlY3JldC1rZXktMzJieXQ=
