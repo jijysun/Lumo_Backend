@@ -26,12 +26,12 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -53,6 +53,25 @@ public class MemberService {
     /** 이메일 인증 성공 티켓. signIn / changePassword 가 1회 소비한다 (C-2). */
     private static final String VERIFIED_KEY_PREFIX = "verified:";
     private static final Duration VERIFIED_TTL = Duration.ofMinutes(10);
+
+    /*
+     * 인증 코드 브루트포스 방어 (H-4).
+     *
+     * 잠금 상태를 카운터 키에서 읽지 않고 별도 키로 둔다.
+     * RedisConfig 의 value serializer 가 GenericJackson2JsonRedisSerializer 라
+     * INCR 이 만든 평문 정수("1")를 get() 으로 되읽으면 JSON 역직렬화에서 깨진다.
+     * → 카운터는 INCR 의 "반환값"만 쓰고(원자적), 잠금 여부는 hasKey 로 판정한다.
+     */
+    private static final String VERIFY_FAIL_PREFIX = "verify_fail:";
+    private static final String VERIFY_LOCK_PREFIX = "verify_lock:";
+    private static final int MAX_VERIFY_ATTEMPTS = 5;
+    private static final Duration VERIFY_LOCK_TTL = Duration.ofMinutes(10);
+
+    /**
+     * java.util.Random 은 48bit LCG 라 출력 2개만 관측하면 시드를 복원해 이후 코드를 예측할 수 있다.
+     * 인증 코드는 보안 목적이므로 SecureRandom 을 쓴다. 인스턴스 생성 비용이 있어 재사용한다(thread-safe).
+     */
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
 
     public MemberRespDTO.GetLoginDTO getLogin(Member member) {
@@ -82,6 +101,10 @@ public class MemberService {
     }
 
     public void requestVerificationCode(String email) {
+        // 잠금 중에는 코드 재발급도 막는다. 막지 않으면 공격자가 코드만 갈아끼우며 메일 발송량을 소진시킨다
+        // (SES 전환 시 발송 한도에 직결된다 — G-23).
+        ensureNotLocked(email);
+
         String code = generateVerificationCode();
         Boolean ifAbsent = redisTemplate.opsForValue().setIfAbsent(email, code, Duration.ofMinutes(3));
 
@@ -96,11 +119,10 @@ public class MemberService {
         }
     }
     public String generateVerificationCode() {
-        Random random = new Random();
         StringBuilder code = new StringBuilder(CODE_LENGTH);
 
         for (int i = 0; i < CODE_LENGTH; i++) {
-            int randomIndex = random.nextInt(CHARACTERS.length());
+            int randomIndex = SECURE_RANDOM.nextInt(CHARACTERS.length());
 
             code.append(CHARACTERS.charAt(randomIndex));
         }
@@ -110,13 +132,17 @@ public class MemberService {
 
 
     public void verifyCode(String email, String code) {
+        ensureNotLocked(email);
+
         String savedCode = (String) redisTemplate.opsForValue().get(email);
 
-        if (savedCode == null) {
-            throw new MemberException(MemberErrorCode.WRONG_CODE);
-        } else if (!savedCode.equals(code)) {
+        if (savedCode == null || !savedCode.equals(code)) {
+            registerVerifyFailure(email);
             throw new MemberException(MemberErrorCode.WRONG_CODE);
         }
+
+        // 성공했으니 실패 카운터를 해제한다. 남겨두면 정상 사용자가 다음 인증에서 불이익을 받는다.
+        redisTemplate.delete(VERIFY_FAIL_PREFIX + email);
 
         // 검증에 쓴 코드는 즉시 폐기한다.
         // 남겨두면 3분 TTL 이 끝날 때까지 같은 코드로 무제한 재검증이 가능했다.
@@ -125,6 +151,38 @@ public class MemberService {
         // 인증에 성공했다는 사실을 티켓으로 남긴다. signIn / changePassword 가 이 티켓을 소비한다.
         // 이전에는 성공 사실을 어디에도 저장하지 않아 verify-code 를 건너뛰고 바로 signIn 을 호출해도 가입이 됐다.
         redisTemplate.opsForValue().set(VERIFIED_KEY_PREFIX + email, "true", VERIFIED_TTL);
+    }
+
+    /** 잠금 상태면 즉시 거절한다. 카운터를 읽지 않고 잠금 키 존재 여부만 본다(상단 주석 참고). */
+    private void ensureNotLocked(String email) {
+        if (Boolean.TRUE.equals(redisTemplate.hasKey(VERIFY_LOCK_PREFIX + email))) {
+            throw new MemberException(MemberErrorCode.TOO_MANY_VERIFY_ATTEMPTS);
+        }
+    }
+
+    /**
+     * 인증 실패를 1회 기록하고, 상한에 도달하면 코드를 폐기한 뒤 잠금을 건다.
+     *
+     * <p>{@code INCR} 은 원자적이고 <b>증가 후 값을 반환</b>하므로 별도 조회 없이 판정할 수 있다.
+     * 키가 없으면 Redis 가 0 에서 시작하므로 첫 호출의 반환값이 1 이고, 그때만 TTL 을 건다.
+     */
+    private void registerVerifyFailure(String email) {
+        String failKey = VERIFY_FAIL_PREFIX + email;
+        Long attempts = redisTemplate.opsForValue().increment(failKey);
+
+        if (attempts == null) {
+            return;
+        }
+
+        if (attempts == 1L) {
+            redisTemplate.expire(failKey, VERIFY_LOCK_TTL);
+        }
+
+        if (attempts >= MAX_VERIFY_ATTEMPTS) {
+            // 코드를 폐기해 현재 코드로는 더 이상 시도할 수 없게 하고, 재발급까지 잠근다.
+            redisTemplate.delete(email);
+            redisTemplate.opsForValue().set(VERIFY_LOCK_PREFIX + email, "locked", VERIFY_LOCK_TTL);
+        }
     }
 
     /**

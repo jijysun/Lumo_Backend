@@ -1,5 +1,7 @@
 package Lumo.lumo_backend.global.security.jwt;
 
+import Lumo.lumo_backend.global.apiResponse.status.ErrorCode;
+import Lumo.lumo_backend.global.exception.GeneralException;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetailsService;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
@@ -137,8 +139,9 @@ public class JWTProvider {
 //        log.info("authoritiesString: {}", authoritiesString);
 
         if (authoritiesString.isEmpty() || claims.get("auth") == null) {
-            ///  GenerationException 으로 수정하기
-            throw new RuntimeException("권한 정보가 없는 이상한 토큰입니다");
+            // 맨 RuntimeException 은 필터의 catch(GeneralException) 에 걸리지 않아
+            // 그대로 컨테이너까지 전파돼 500 HTML 이 나갔다 (H-1).
+            throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
         }
 
         // 표준 필드로 변경
@@ -161,8 +164,8 @@ public class JWTProvider {
             return claims;
         }
         catch (Exception e){
-            ///  GenerationException 으로 수정하기
-            throw new RuntimeException("파싱이 잘못되었습니다.");
+            // 위와 동일 — 파싱 실패도 APIResponse 형식의 401 로 나가야 한다 (H-1).
+            throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
         }
     }
 
