@@ -1,6 +1,8 @@
 package Lumo.lumo_backend.global.security.config;
 
 import Lumo.lumo_backend.global.security.filter.JWTAuthenticationFilter;
+import Lumo.lumo_backend.global.security.handler.JwtAccessDeniedHandler;
+import Lumo.lumo_backend.global.security.handler.JwtAuthenticationEntryPoint;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,6 +22,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JWTAuthenticationFilter jwtAuthenticationFilter;
+    private final JwtAuthenticationEntryPoint authenticationEntryPoint;
+    private final JwtAccessDeniedHandler accessDeniedHandler;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -42,6 +46,11 @@ public class SecurityConfig {
                     session.sessionCreationPolicy(SessionCreationPolicy.STATELESS);
                 })
                 .csrf(csrf -> csrf.disable())
+                // 인증 실패(401) / 인가 실패(403) 응답을 APIResponse 형식으로 통일한다 (H-1).
+                // 등록하지 않으면 formLogin·httpBasic 이 없는 이 프로젝트에서는 본문 없는 403 이 나간다.
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
                 .authorizeHttpRequests((auth) -> {
                     auth
                             // ── 인프라 ────────────────────────────────────────────────

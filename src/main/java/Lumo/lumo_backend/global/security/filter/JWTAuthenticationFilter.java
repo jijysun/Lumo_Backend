@@ -3,6 +3,7 @@ package Lumo.lumo_backend.global.security.filter;
 import Lumo.lumo_backend.global.apiResponse.status.ErrorCode;
 import Lumo.lumo_backend.global.exception.GeneralException;
 import Lumo.lumo_backend.global.security.jwt.JWT;
+import Lumo.lumo_backend.global.security.handler.SecurityErrorResponder;
 import Lumo.lumo_backend.global.security.jwt.JWTProvider;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetailsService;
 import io.jsonwebtoken.Claims;
@@ -37,6 +38,7 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
     private final JWTProvider jwtProvider;
     private final RedisTemplate redisTemplate;
     private final CustomUserDetailsService customUserDetailsService;
+    private final SecurityErrorResponder responder;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
@@ -67,10 +69,24 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
         }
         catch (ExpiredJwtException e){
             log.warn("[JWTAuthenticationFilter] - AT expired, attempting to refresh token");
-            handleExpiredAccessToken(request, response, e);
+            try {
+                handleExpiredAccessToken(request, response, e);
+            }
+            // RT 부재/불일치. 아래 catch(JwtException|IllegalArgumentException) 는 상속 관계가 아니라
+            // GeneralException 을 잡지 못했고, 그대로 서블릿 컨테이너까지 전파돼 500 HTML 이 나갔다 (H-1).
+            catch (GeneralException ge) {
+                responder.write(response, ge.getErrorCode());
+                return;
+            }
+        }
+        // 블랙리스트 등 필터가 직접 내린 판정. 던지지 않고 여기서 APIResponse 로 응답하고 체인을 끊는다.
+        catch (GeneralException e){
+            responder.write(response, e.getErrorCode());
+            return;
         }
         catch(JwtException | IllegalArgumentException e){
             log.info("[JWTAuthenticationFilter] - Invalid Refresh Token! ");
+            // 인증 정보를 심지 않고 통과시킨다. 보호 자원이면 JwtAuthenticationEntryPoint 가 401 을 낸다.
         }
 
         filterChain.doFilter(request, response);
