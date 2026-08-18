@@ -166,7 +166,14 @@ public class MemberService {
         Authentication authentication = new UsernamePasswordAuthenticationToken(member.getEmail(), member.getPassword(), authorities);
         JWT jwt = jwtProvider.generateToken(authentication);
 
-        redisTemplate.opsForValue().set("refresh:"+dto.getEmail(), jwt.getRefreshToken());
+        // TTL 은 RT 자체의 exp 에서 역산한다 (H-2).
+        // TTL 없이 set 하면 로그아웃하지 않은 사용자의 키가 영구히 남아 회원 수에 비례해 단조 증가한다.
+        // 상수를 복제하지 않고 토큰의 만료 시각을 쓰므로, C-3 로 RT 수명을 늘려도 TTL 이 자동으로 따라간다.
+        redisTemplate.opsForValue().set(
+                "refresh:" + dto.getEmail(),
+                jwt.getRefreshToken(),
+                jwtProvider.getRemainingTime(jwt.getRefreshToken()),
+                TimeUnit.MILLISECONDS);
 
 //        log.info("[MemberService - login] Success to login -> {} - {}", dto.getEmail(), jwt.getRefreshToken());
 

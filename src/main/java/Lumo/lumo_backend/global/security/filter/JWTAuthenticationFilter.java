@@ -27,6 +27,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -127,7 +128,12 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                     .sameSite("Strict")
                     .build();
             response.setHeader(HttpHeaders.SET_COOKIE, cookie.toString());
-            redisTemplate.opsForValue().set("refresh:"+username, newJWT.getRefreshToken());
+            // 회전된 RT 도 동일하게 TTL 을 건다 (H-2). 여기가 빠지면 재발급마다 영구 키가 하나씩 쌓인다.
+            redisTemplate.opsForValue().set(
+                    "refresh:" + username,
+                    newJWT.getRefreshToken(),
+                    jwtProvider.getRemainingTime(newJWT.getRefreshToken()),
+                    TimeUnit.MILLISECONDS);
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
             log.info("Successfully refreshed token and set security context for user: {}", username);
