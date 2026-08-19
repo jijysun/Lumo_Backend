@@ -126,6 +126,7 @@ jobs:
             REDIS_PORT=${{secrets.REDIS_PORT}}
             JWT_SECRET_KEY=${{secrets.JWT_SECRET_KEY}}
             OPENAI_API_KEY=${{secrets.OPENAI_API_KEY}}
+            GRAFANA_ADMIN_PASSWORD=${{secrets.GRAFANA_ADMIN_PASSWORD}}
             LUMO_IMAGE=${{secrets.DOCKER_USERNAME}}/lumo
             LUMO_ENV_EOF
 
@@ -134,7 +135,7 @@ jobs:
             echo "LUMO_TAG=${{ needs.build-and-push-to-docker.outputs.image_tag }}" >> .env
 
             # 시크릿 오타·누락은 런타임에야 드러나므로 여기서 먼저 걸러낸다.
-            for k in MYSQL_HOST MYSQL_NAME MYSQL_USERNAME MYSQL_PASSWORD REDIS_HOST REDIS_PORT JWT_SECRET_KEY; do
+            for k in MYSQL_HOST MYSQL_NAME MYSQL_USERNAME MYSQL_PASSWORD REDIS_HOST REDIS_PORT JWT_SECRET_KEY GRAFANA_ADMIN_PASSWORD; do
               grep -q "^${k}=." .env || { echo ">>> .env 의 ${k} 가 비어 있습니다. GitHub Secrets 확인 필요"; exit 1; }
             done
 

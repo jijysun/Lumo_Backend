@@ -85,7 +85,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=0000
+      # (M-8) 로컬은 기본값을 허용하되 값 자체는 환경변수로 뺀다.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
     depends_on:
       - prometheus-local
     networks:
