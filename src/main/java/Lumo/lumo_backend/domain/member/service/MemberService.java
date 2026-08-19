@@ -268,13 +268,19 @@ public class MemberService {
 
         MissionStat missionStat = missionHistoryRepository.findMissionStatsByMember(persistedMember.getId(), LocalDate.now().withDayOfMonth(1).atStartOfDay());
 
-        int missionSuccessRate;
-        if (missionStat.getSuccess() == null){
-            missionSuccessRate = 0;
-        }
-        else{
-            missionSuccessRate = (int) (missionStat.getSuccess() / missionStat.getTotal() *100);
-        }
+        /*
+         * (M-4) 이전 코드는 (int)(Long / Long * 100) 이라 정수 나눗셈이 먼저 수행됐다.
+         * success < total 이면 0, 같으면 1 -> x100 하면 결과가 항상 0 또는 100 뿐이었다.
+         * 추가로 total 이 0 이면 ArithmeticException, null 이면 언박싱 NPE 였다
+         * (getSuccess() 만 null 검사하고 getTotal() 은 하지 않았다).
+         *
+         * COUNT/SUM 집계 쿼리라 행 자체는 항상 반환되지만, 대상이 없으면 SUM 이 null 이고
+         * COUNT 는 0 이다. 계산식은 Member.updateMissionSuccessRate() 와 동일하게 맞춘다.
+         */
+        long total = (missionStat == null || missionStat.getTotal() == null) ? 0L : missionStat.getTotal();
+        long success = (missionStat == null || missionStat.getSuccess() == null) ? 0L : missionStat.getSuccess();
+
+        int missionSuccessRate = (total == 0L) ? 0 : (int) Math.round(success * 100.0 / total);
 
         return MemberRespDTO.GetMissionRecordRespDTO.builder()
                 .missionSuccessRate(missionSuccessRate)
@@ -287,11 +293,22 @@ public class MemberService {
         return;
     }
 
-    // 주 마다 사용자 연속 성공 횟수 정리
-    @Scheduled(cron = "0 0 0 * * 0")
-    public void asdf(){
-        memberRepository.findAll().forEach(Member::initConsecutiveSuccessCnt);
-    }
+    /*
+     * (M-5) 주간 연속 성공 횟수 초기화 배치 — 기능 제거 (사용자 결정, 20260818).
+     *
+     * 어차피 동작하지 않고 있었다: @Transactional 이 없어 영속성 컨텍스트가 유지되지 않으므로
+     * dirty checking 이 일어나지 않아 변경이 DB 에 반영되지 않았다.
+     * (LumoBackendApplication 에 @EnableScheduling 이 있어 스케줄 자체는 매주 돌고 있었다)
+     *
+     * 추가로 findAll() 로 전 회원을 메모리에 적재해 회원 수 증가 시 OOM 위험이 있었고,
+     * 블루-그린 전환 순간 두 컨테이너가 동시에 살아있으면 중복 실행됐다.
+     *
+     * 되살릴 경우: @Transactional + @Modifying 벌크 UPDATE 1회 + 단일 실행 락(SET NX EX) 필요.
+     */
+//    @Scheduled(cron = "0 0 0 * * 0")
+//    public void resetConsecutiveSuccessCount(){
+//        memberRepository.findAll().forEach(Member::initConsecutiveSuccessCnt);
+//    }
 
     @Transactional
     public MemberRespDTO.SimpleAPIRespDTO changePassword(String email, String newPassword) {
