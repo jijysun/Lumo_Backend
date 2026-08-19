@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
 public class EmailService {
 
     private final JavaMailSender mailSender;
-    private final RedisTemplate redisTemplate;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @Async("mailExecutor")
     public void startMailWorker(int workerId) {
@@ -29,7 +29,7 @@ public class EmailService {
         while (true) {
             try {
                 // BRPOP!
-                String task = (String) redisTemplate.opsForList().rightPop("email_queue", 5, TimeUnit.SECONDS);
+                String task = redisTemplate.opsForList().rightPop("email_queue", 5, TimeUnit.SECONDS);
 
                 if (task != null) {
                     String[] data = task.split(":");

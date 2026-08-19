@@ -43,7 +43,8 @@ public class MemberService {
     private final MemberRepository memberRepository;
     private final MissionHistoryRepository missionHistoryRepository;
     private final EmailService emailService;
-    private final RedisTemplate redisTemplate;
+    // (M-9) raw type 이면 반환값이 Object 라 매번 캐스팅해야 하고 타입 오류가 런타임에야 드러난다.
+    private final RedisTemplate<String, String> redisTemplate;
     private final JWTProvider jwtProvider;
     private final BCryptPasswordEncoder encoder;
 
@@ -134,7 +135,7 @@ public class MemberService {
     public void verifyCode(String email, String code) {
         ensureNotLocked(email);
 
-        String savedCode = (String) redisTemplate.opsForValue().get(email);
+        String savedCode = redisTemplate.opsForValue().get(email);
 
         if (savedCode == null || !savedCode.equals(code)) {
             registerVerifyFailure(email);

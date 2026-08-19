@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 public class JWTAuthenticationFilter extends OncePerRequestFilter {
 
     private final JWTProvider jwtProvider;
-    private final RedisTemplate redisTemplate;
+    private final RedisTemplate<String, String> redisTemplate;
     private final CustomUserDetailsService customUserDetailsService;
     private final SecurityErrorResponder responder;
 
@@ -48,7 +48,7 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
         try{
             if(accessToken != null && jwtProvider.validateToken(accessToken)){ // 비었거나, 올바르지 않거나
 
-                String isBlackListed = (String) redisTemplate.opsForValue().get("blacklist:" + accessToken);
+                String isBlackListed = redisTemplate.opsForValue().get("blacklist:" + accessToken);
                 if (isBlackListed != null){
                     log.warn("[JWTAuthenticationFilter] - Using BlackListed Token!");
                     throw new GeneralException(ErrorCode.BLACKLISTED_TOKEN);
@@ -120,7 +120,7 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
         // String authorities = claims.get("auth").toString(); 어차피 userDetails에서 검색하니까 필요 X
 
         String requestRT = resolveRefreshToken(request);
-        String savedRT = (String) redisTemplate.opsForValue().get("refresh:"+username); // 이메일
+        String savedRT = redisTemplate.opsForValue().get("refresh:"+username); // 이메일
 
         if (savedRT == null){
             log.warn("[JWTAuthenticationFilter] - savedRT is null!");
