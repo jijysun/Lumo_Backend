@@ -1,7 +1,3 @@
-logging:
-  level:
-    show_sql: DEBUG
-
 spring:
   application:
     name: lumo-backend

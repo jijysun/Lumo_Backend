@@ -114,7 +114,8 @@ public class JWTProvider {
             log.warn("[JWTProvider-ValidateToken()] : 잘못된 토큰입니다 ", e);
         }
         catch (ExpiredJwtException e){ // 실패 응답을 통한 로그인 요청 로직
-            log.warn("[JWTProvider-ValidateToken()] : 만료된 토큰입니다 ", e);
+            // 만료 토큰마다 스택트레이스 전문이 찍혀서 레벨만 낮추기
+            log.debug("[JWTProvider-ValidateToken()] : 만료된 토큰입니다");
             throw e;
         }
         catch (UnsupportedJwtException e) {
@@ -146,7 +147,9 @@ public class JWTProvider {
 
         // 표준 필드로 변경
 //        log.info("[JWTProvider - getAuthentication()] email: {}", claims.get("username", String.class));
-        log.info("[JWTProvider - getAuthentication()] email: {}", claims.getSubject());
+
+        // 계속 찍히는 관계로 처리
+//        log.info("[JWTProvider - getAuthentication()] email: {}", claims.getSubject());
 
         UserDetails userDetails = customUserDetailsService.loadUserByUsername(claims.getSubject());
         return new UsernamePasswordAuthenticationToken(userDetails, "", userDetails.getAuthorities());

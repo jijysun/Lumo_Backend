@@ -13,10 +13,11 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    # show-sql / format_sql 비활성화. 측정 오염 방지
+#    show-sql: true
     properties:
       hibernate:
-        format_sql: true
+#        format_sql: true
         dialect: org.hibernate.dialect.MySQL8Dialect
 
   mail:
