@@ -2,9 +2,12 @@ package Lumo.lumo_backend.domain.member.controller;
 
 import Lumo.lumo_backend.domain.member.dto.MemberReqDTO;
 import Lumo.lumo_backend.domain.member.dto.MemberRespDTO;
+import Lumo.lumo_backend.domain.member.exception.MemberException;
 import Lumo.lumo_backend.domain.member.service.MemberService;
+import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
 import Lumo.lumo_backend.domain.member.status.MemberSuccessCode;
 import Lumo.lumo_backend.global.apiResponse.APIResponse;
+import Lumo.lumo_backend.global.ratelimit.IpRateLimiter;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
 // import io.swagger.v3.oas.annotations.Operation;
 // import io.swagger.v3.oas.annotations.tags.Tag;
@@ -17,6 +20,8 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
+
 import static Lumo.lumo_backend.domain.member.status.MemberSuccessCode.VERIFY_CODE_SUCCESS;
 
 @RestController
@@ -27,6 +32,16 @@ import static Lumo.lumo_backend.domain.member.status.MemberSuccessCode.VERIFY_CO
 public class MemberController {
 
     private final MemberService memberService;
+    private final IpRateLimiter ipRateLimiter;
+
+    /*
+     * (M-7) 사용자 열거 대응.
+     * email-duplicate / find-email 은 "이 이메일이 가입돼 있는가"를 그대로 알려준다.
+     * 회원가입 UX 상 응답을 감출 수 없으므로, 같은 출처가 대량으로 훑는 것을 막는다.
+     * 이메일 단위로 세면 이메일을 바꿔가며 우회되므로 반드시 IP 기준이어야 한다.
+     */
+    private static final int LOOKUP_LIMIT = 20;
+    private static final Duration LOOKUP_WINDOW = Duration.ofMinutes(10);
 
     @GetMapping("/login")
     // @Operation(summary = "로그인 방식 조회 API", description = "사용자가 로그인한 방식을 조회하는 API 입니다.")
@@ -55,16 +70,25 @@ public class MemberController {
 
     @PostMapping("/logout")
     // @Operation(summary = "로그아웃 API", description = "로그인을 한 사용자에 한해, 로그아웃을 진행하는 API 입니다.")
-    public APIResponse<Object> logout(HttpServletRequest request, @AuthenticationPrincipal CustomUserDetails userDetails) {
+    public APIResponse<MemberRespDTO.SimpleAPIRespDTO> logout(HttpServletRequest request, @AuthenticationPrincipal CustomUserDetails userDetails) {
 
+        // (M-6) 로그아웃은 "미구현"이 아니라 구현돼 있는데 null 을 반환하던 것이다.
+        // Authorization 헤더가 없으면 아무 일도 안 하고 성공처럼 보이던 것도 함께 막는다.
         String bearerToken = request.getHeader("Authorization");
-        if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
-            memberService.logout(bearerToken.substring(7).trim(), userDetails.getMember().getId());
+        if (bearerToken == null || !bearerToken.startsWith("Bearer ")) {
+            throw new MemberException(MemberErrorCode.CANT_FOUND_MEMBER);
         }
-        return null; // bool 값 리턴
+
+        memberService.logout(bearerToken.substring(7).trim(), userDetails.getMember().getId());
+
+        return APIResponse.onSuccess(
+                MemberRespDTO.SimpleAPIRespDTO.builder().isSuccess(true).build(),
+                MemberSuccessCode.LOGOUT_SUCCESS);
     }
 
-    @PostMapping("/withdrawl")
+    // (M-6) 회원탈퇴 — 미구현이고 구현 예정도 없다. 매핑만 주석 처리해 엔드포인트에서 제외한다.
+    //       구현 시 @PostMapping 을 되살리고 SOFT DELETE 로 작성할 것.
+//    @PostMapping("/withdrawl")
     // @Operation(summary = "회원탈퇴 API", description = "로그인을 한 사용자에 한해, 회원탈퇴를 진행하는 API 입니다.")
     public APIResponse<Object> withdrawal() {
         return null; // bool 값 리턴, SOFT DELETE
@@ -72,7 +96,10 @@ public class MemberController {
 
     @GetMapping("/email-duplicate")
     // @Operation(summary = "이메일 중복 체크 API", description = "회원가입 중 이메일 확잍을 통해 서비스 중복 가입을 방지하는 API 입니다.")
-    public APIResponse<MemberRespDTO.SimpleAPIRespDTO> checkEmailDuplicate(@RequestParam("email") String email) {
+    public APIResponse<MemberRespDTO.SimpleAPIRespDTO> checkEmailDuplicate(@RequestParam("email") String email,
+                                                                           HttpServletRequest request) {
+        ipRateLimiter.check(request, "email-duplicate", LOOKUP_LIMIT, LOOKUP_WINDOW);
+
         MemberRespDTO.SimpleAPIRespDTO dto = MemberRespDTO.SimpleAPIRespDTO.builder().isSuccess(memberService.checkEmailDuplicate(email)).build();
         return APIResponse.onSuccess(dto, MemberSuccessCode.EMAIL_DUPLICATE_CHECK_SUCCESS);
     }
@@ -100,7 +127,10 @@ public class MemberController {
 
     @PostMapping("/find-email")
     // @Operation(summary = "비밀번호 재설정 대상 이메일 검색 API", description = "비밀번호를 재설정할 이메일을 찾는 API 입니다")
-    public APIResponse<MemberRespDTO.FindEmailRespDTO> findEmail(@RequestParam String email) {
+    public APIResponse<MemberRespDTO.FindEmailRespDTO> findEmail(@RequestParam String email,
+                                                                 HttpServletRequest request) {
+        ipRateLimiter.check(request, "find-email", LOOKUP_LIMIT, LOOKUP_WINDOW);
+
         return APIResponse.onSuccess(memberService.findEmail(email), MemberSuccessCode.FIND_EMAIL_SUCCESS);
     }
 
