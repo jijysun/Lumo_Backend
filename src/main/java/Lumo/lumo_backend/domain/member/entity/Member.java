@@ -25,7 +25,16 @@ import java.util.List;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Getter
 @DynamicInsert
-@Table(name = "member")
+// (A-2 / M-13) email 은 인증된 모든 요청이 타는 최고 빈도 조회 키인데 인덱스가 없어 풀스캔이었고,
+// DB 유니크 제약도 없어 signIn 의 "조회 후 저장" 사이에서 중복 가입 레이스가 열려 있었다.
+// unique 제약은 유니크 인덱스를 만들므로 성능과 정합성이 한 번에 해결된다.
+//
+// @Column(unique = true) 대신 제약 이름을 명시한다 — 생성된 이름(UK_xxxxxx)은
+// 마이그레이션 스크립트에서 참조할 수 없고 오류 메시지 추적도 어렵다.
+@Table(
+        name = "member",
+        uniqueConstraints = @UniqueConstraint(name = "uk_member_email", columnNames = "email")
+)
 public class Member extends BaseEntity {
 
     @Id

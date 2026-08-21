@@ -24,6 +24,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
@@ -114,7 +115,7 @@ public class MemberService {
             throw new MemberException(MemberErrorCode.ALREADY_SEND); // 따닥 방지
         }
         else{
-            redisTemplate.opsForList().leftPush("email_queue", email + ":" + code);
+            redisTemplate.opsForList().leftPush(EmailService.QUEUE_KEY, email + ":" + code);
 //            log.info("[MemberService - requestVerificationCode] call EmailService with {} - {}", email, code);
 //            emailService.startWork();
         }
@@ -210,7 +211,14 @@ public class MemberService {
             throw new MemberException(MemberErrorCode.EXIST_MEMBER);
         }
 
-        memberRepository.save(Member.create(dto.getEmail(), dto.getUsername(), encoder.encode(dto.getPassword()), Login.NORMAL, MemberRole.USER));
+        try {
+            memberRepository.save(Member.create(dto.getEmail(), dto.getUsername(), encoder.encode(dto.getPassword()), Login.NORMAL, MemberRole.USER));
+        } catch (DataIntegrityViolationException e) {
+            // (A-2) 위 findByEmail 검사와 이 save 사이에 다른 요청이 같은 이메일로 먼저 저장할 수 있다.
+            // 애플리케이션 단 "조회 후 저장" 만으로는 이 창을 닫을 수 없고, uk_member_email 이 최종 방어선이다.
+            // 제약이 없던 시절에는 같은 이메일로 두 행이 그대로 생겼다 (M-13).
+            throw new MemberException(MemberErrorCode.EXIST_MEMBER);
+        }
 
 //        log.info("[MemberService - signIn] Success to signIn -> {}, {}", dto.getEmail(), dto.getUsername());
     }

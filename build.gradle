@@ -29,6 +29,11 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator' // prometheus, blue-green checking
 	implementation 'org.springframework.boot:spring-boot-starter'
 
+	// (M-2) 스키마 소유권을 Hibernate hbm2ddl 에서 Flyway 로 이관.
+	// MySQL 은 Flyway 10 부터 별도 모듈이 필요하다.
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.flywaydb:flyway-mysql'
+
 	// swagger — 프로젝트 경량화를 위해 제거 (20260813). 되살릴 때 3줄 모두 해제할 것.
 	// implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.15'
 	// implementation 'org.apache.commons:commons-lang3:3.18.0' // springdoc의 의존 라이브러리. 이전 버전 취약성 문제

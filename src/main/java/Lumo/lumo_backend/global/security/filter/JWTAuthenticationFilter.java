@@ -14,6 +14,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -39,16 +42,74 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
     private final RedisTemplate<String, String> redisTemplate;
     private final CustomUserDetailsService customUserDetailsService;
     private final SecurityErrorResponder responder;
+    private final MeterRegistry meterRegistry;
+
+    /**
+     * 인증 필터 전체 소요 시간, 여기만 히스토그램을 켠다 —
+     * p95 가 필요한 건 전체뿐이고, 블루-그린 2컨테이너의 분위수를 서버에서 합산하려면
+     * publishPercentiles 가 아니라 버킷 기반이어야 한다(전자는 인스턴스 간 합산 불가).
+     */
+    private Timer filterTimer;
+
+    /** 블랙리스트 Redis 왕복. "제거할 가치가 있는가"를 판단할 근거가 된다. */
+    private Timer blacklistTimer;
+
+    @PostConstruct
+    void initMetrics() {
+        filterTimer = Timer.builder("auth.filter.duration")
+                .description("JWT 인증 필터 전체 소요 시간 (체인 이후는 제외)")
+                .publishPercentileHistogram()
+                .register(meterRegistry);
+
+        blacklistTimer = Timer.builder("auth.blacklist.lookup")
+                .description("블랙리스트 Redis 조회 소요 시간")
+                .register(meterRegistry);
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
         String accessToken = resolveAccessToken(request);
 
+        // 토큰이 없는 요청(헬스체크·정적 리소스 등)은 인증 구간 자체가 없다.
+        // 계측에 포함하면 0ms 표본이 대량으로 섞여서 오염됨
+        if (accessToken == null) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        Timer.Sample sample = Timer.start(meterRegistry);
+        boolean proceed;
+        try {
+            proceed = authenticate(request, response, accessToken);
+        } finally {
+            // 오류 응답으로 끝나는 경로도 인증 구간은 소비했으므로 함께 기록
+            sample.stop(filterTimer);
+        }
+
+        if (proceed) {
+            filterChain.doFilter(request, response);
+        }
+    }
+
+    /**
+     * 실제 인증 처리. 계측 범위를 filterChain.doFilter() 이후와 분리하기 위해 메서드로 분리.
+     *
+     * @return {@code true} 면 필터 체인을 계속 진행, false면 이미 오류 응답을 썼으므로 중단
+     */
+    private boolean authenticate(HttpServletRequest request, HttpServletResponse response, String accessToken)
+            throws IOException {
+
         /// jwtProvider 에서 인증 조회 + 토큰 검증이 필요!
         try{
-            if(accessToken != null && jwtProvider.validateToken(accessToken)){ // 비었거나, 올바르지 않거나
+            if(jwtProvider.validateToken(accessToken)){ // 올바르지 않거나
 
-                String isBlackListed = redisTemplate.opsForValue().get("blacklist:" + accessToken);
+                Timer.Sample blacklistSample = Timer.start(meterRegistry);
+                String isBlackListed;
+                try {
+                    isBlackListed = redisTemplate.opsForValue().get("blacklist:" + accessToken);
+                } finally {
+                    blacklistSample.stop(blacklistTimer);
+                }
                 if (isBlackListed != null){
                     log.warn("[JWTAuthenticationFilter] - Using BlackListed Token!");
                     throw new GeneralException(ErrorCode.BLACKLISTED_TOKEN);
@@ -76,20 +137,20 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
             // GeneralException 을 잡지 못했고, 그대로 서블릿 컨테이너까지 전파돼 500 HTML 이 나갔다 (H-1).
             catch (GeneralException ge) {
                 responder.write(response, ge.getErrorCode());
-                return;
+                return false;
             }
         }
         // 블랙리스트 등 필터가 직접 내린 판정. 던지지 않고 여기서 APIResponse 로 응답하고 체인을 끊는다.
         catch (GeneralException e){
             responder.write(response, e.getErrorCode());
-            return;
+            return false;
         }
         catch(JwtException | IllegalArgumentException e){
             log.info("[JWTAuthenticationFilter] - Invalid Refresh Token! ");
             // 인증 정보를 심지 않고 통과시킨다. 보호 자원이면 JwtAuthenticationEntryPoint 가 401 을 낸다.
         }
 
-        filterChain.doFilter(request, response);
+        return true;
     }
 
     private String resolveAccessToken(HttpServletRequest request){

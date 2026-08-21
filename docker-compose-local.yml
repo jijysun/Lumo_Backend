@@ -18,8 +18,13 @@ services:
       - SPRING_MAIL_PORT=1025
     env_file: .env
     depends_on:
-      - mysql-local
-      - mailpit
+      # Flyway 가 기동 시 DB 에 붙으므로 MySQL 이 "실행 중"이 아니라 "접속 가능"이어야 한다.
+      # 단순 depends_on 은 컨테이너 시작만 보장해 첫 기동이 Communications link failure 로 죽는다
+      # (restart: on-failure 가 가려줄 뿐, 기동이 20초 이상 늦어진다).
+      mysql-local:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
     networks:
       - lumo-test-network
     restart: on-failure
@@ -30,6 +35,12 @@ services:
     environment:
       - MYSQL_DATABASE=lumo_test
       - MYSQL_ROOT_PASSWORD=password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-ppassword"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     ports:
       - "3307:3306"
     networks:

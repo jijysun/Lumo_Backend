@@ -15,8 +15,11 @@ spring:
 #        show_sql: true
 #        format_sql: true
 #        use_sql_comments: true
+        # (M-2) update -> validate. 스키마는 Flyway 가 만들고 Hibernate 는 대조만 한다.
+        # update 는 컬럼 삭제를 반영하지 않아 드리프트가 누적되고, 중복 행이 있으면
+        # 유니크 제약 추가가 실패해도 로그만 남기고 조용히 넘어간다 (M-13 이 그 사례).
         hbm2ddl:
-          auto: update
+          auto: validate
         default_batch_fetch_size: 1000
   mail:
     host: ${MAIL_SENDER_HOST}
@@ -34,6 +37,15 @@ spring:
   sql:
     init:
       mode: never
+
+  # (M-2) 마이그레이션은 src/main/resources/db/migration 의 V*.sql 로만 적용한다.
+  # baseline-on-migrate: 이력 테이블이 없는 기존 DB(스냅샷 복원 등)를 만나면
+  #   V1 을 이미 적용된 것으로 간주하고 V2 부터 실행한다. 새 DB 는 V1 부터 전부 실행된다.
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 1
+    validate-on-migrate: true
 
 management:
   endpoints:

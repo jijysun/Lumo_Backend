@@ -2,6 +2,10 @@ package Lumo.lumo_backend.domain.email.service;
 
 import Lumo.lumo_backend.domain.member.exception.MemberException;
 import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import jakarta.annotation.PostConstruct;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
@@ -20,8 +24,40 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class EmailService {
 
+    /** 발송 대기 큐 키. MailQueueMetrics 가 같은 키를 봐야 하므로 상수로 노출한다. */
+    public static final String QUEUE_KEY = "email_queue";
+
     private final JavaMailSender mailSender;
     private final RedisTemplate<String, String> redisTemplate;
+    private final MeterRegistry meterRegistry;
+
+    /** SMTP 왕복 시간. G-4 의 필요 워커 수를 Little's Law 로 역산하는 입력값이 된다. */
+    private Timer sendTimer;
+
+    /**
+     * 발송 성공·실패 건수.
+     * 그래서 "1000건 처리"가 큐 배출 속도인지 실제 수락 건수인지 구분할 수 없었다.
+     * 이 카운터가 그 주장을 방어할 수 있게 해준다.
+     */
+    private Counter sendSuccess;
+    private Counter sendFailure;
+
+    @PostConstruct
+    void initMetrics() {
+        sendTimer = Timer.builder("mail.send.duration")
+                .description("SMTP 발송 1건 소요 시간")
+                .register(meterRegistry);
+
+        sendSuccess = Counter.builder("mail.send.result")
+                .description("메일 발송 결과 건수")
+                .tag("result", "success")
+                .register(meterRegistry);
+
+        sendFailure = Counter.builder("mail.send.result")
+                .description("메일 발송 결과 건수")
+                .tag("result", "fail")
+                .register(meterRegistry);
+    }
 
     @Async("mailExecutor")
     public void startMailWorker(int workerId) {
@@ -29,7 +65,7 @@ public class EmailService {
         while (true) {
             try {
                 // BRPOP!
-                String task = redisTemplate.opsForList().rightPop("email_queue", 5, TimeUnit.SECONDS);
+                String task = redisTemplate.opsForList().rightPop(QUEUE_KEY, 5, TimeUnit.SECONDS);
 
                 if (task != null) {
                     String[] data = task.split(":");
@@ -49,6 +85,19 @@ public class EmailService {
     }
 
     public void sendEmail(String email, String code) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        boolean success = false;
+        try {
+            doSendEmail(email, code);
+            success = true;
+        } finally {
+            // 실패도 SMTP 왕복 시간을 소비했으므로 함께 기록한다.
+            sample.stop(sendTimer);
+            (success ? sendSuccess : sendFailure).increment();
+        }
+    }
+
+    private void doSendEmail(String email, String code) {
         MimeMessage msg = mailSender.createMimeMessage();
         MimeMessageHelper helper;
 
