@@ -48,6 +48,11 @@ spring:
     validate-on-migrate: true
 
 management:
+  # (20260821) Grafana 대시보드 20727 은 상단 변수로 application 라벨을 요구한다.
+  # 이 태그가 없으면 $application 에 값이 없어 대시보드의 모든 패널이 빈 화면으로 나온다.
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:
