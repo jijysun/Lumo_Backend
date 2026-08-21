@@ -1,3 +1,16 @@
+/*
+ * ⚠️ 측정 전용 브랜치 (measure/s1-raw) — develop 에 병합하지 말 것.
+ *
+ * 4단계 계측의 [1단계 = 원시 구조] 대조군이다. 2026-02-05 `7a28965` 시점의 메일 파이프라인
+ * (전용 스레드풀 없는 @Async · 큐 없음 · 비원자 중복 방지)을 현재 인프라 위에 재현했다.
+ *
+ * 왜 그 커밋을 그대로 배포하지 않는가 — 당시 코드에는 계측·Flyway·Seeder·arm64 Dockerfile 이
+ * 없어 (a) 서버 내부 지표를 하나도 얻을 수 없고 (b) t4g 배포 자체가 어렵다. 측정 도구가 회차마다
+ * 다르면 비교가 성립하지 않으므로, 인프라는 현행으로 두고 "메일 파이프라인만" 과거로 되돌린다.
+ *
+ * 되돌린 것 : 중복 방지 원자성 · 작업 큐 · 워커 풀
+ * 유지한 것 : 계측 3종 · 인증 개선(C-3·G-6·G-8·G-9) · 보안 수정 · 배포 인프라
+ */
 package Lumo.lumo_backend.domain.member.service;
 
 import Lumo.lumo_backend.domain.alarm.entity.MissionHistory;
@@ -114,16 +127,21 @@ public class MemberService {
         ensureNotLocked(email);
 
         String code = generateVerificationCode();
-        Boolean ifAbsent = redisTemplate.opsForValue().setIfAbsent(email, code, Duration.ofMinutes(3));
 
-        if (Boolean.FALSE.equals(ifAbsent)){
-//            log.info("[MemberService - requestVerificationCode] already send to {} with {}", email, redisTemplate.opsForValue().get(email));
+        /*
+         * (measure/s1-raw) 원시 구조 — setIfAbsent(원자) 를 get + set(비원자) 로 되돌린다.
+         *
+         * 읽기와 쓰기가 분리되어 있고 쓰기는 아래 비동기 경로에서 일어나므로, 동시 요청 두 건이
+         * 모두 이 검사를 통과할 수 있다. 그 결과가 "한 사용자에게 여러 이메일 발송"이다.
+         * 큐도 워커도 없이 요청 스레드가 바로 비동기 작업을 던진다.
+         */
+        String preCode = redisTemplate.opsForValue().get(email);
+
+        if (preCode != null){
             throw new MemberException(MemberErrorCode.ALREADY_SEND); // 따닥 방지
         }
         else{
-            redisTemplate.opsForList().leftPush(EmailService.QUEUE_KEY, email + ":" + code);
-//            log.info("[MemberService - requestVerificationCode] call EmailService with {} - {}", email, code);
-//            emailService.startWork();
+            emailService.sendEmailAsync(email, code);
         }
     }
     public String generateVerificationCode() {

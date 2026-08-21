@@ -1,3 +1,16 @@
+/*
+ * ⚠️ 측정 전용 브랜치 (measure/s1-raw) — develop 에 병합하지 말 것.
+ *
+ * 4단계 계측의 [1단계 = 원시 구조] 대조군이다. 2026-02-05 `7a28965` 시점의 메일 파이프라인
+ * (전용 스레드풀 없는 @Async · 큐 없음 · 비원자 중복 방지)을 현재 인프라 위에 재현했다.
+ *
+ * 왜 그 커밋을 그대로 배포하지 않는가 — 당시 코드에는 계측·Flyway·Seeder·arm64 Dockerfile 이
+ * 없어 (a) 서버 내부 지표를 하나도 얻을 수 없고 (b) t4g 배포 자체가 어렵다. 측정 도구가 회차마다
+ * 다르면 비교가 성립하지 않으므로, 인프라는 현행으로 두고 "메일 파이프라인만" 과거로 되돌린다.
+ *
+ * 되돌린 것 : 중복 방지 원자성 · 작업 큐 · 워커 풀
+ * 유지한 것 : 계측 3종 · 인증 개선(C-3·G-6·G-8·G-9) · 보안 수정 · 배포 인프라
+ */
 package Lumo.lumo_backend.domain.email.service;
 
 import Lumo.lumo_backend.domain.member.exception.MemberException;
@@ -17,7 +30,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.io.UnsupportedEncodingException;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 
 @Service
 @RequiredArgsConstructor
@@ -59,29 +72,17 @@ public class EmailService {
                 .register(meterRegistry);
     }
 
-    @Async("mailExecutor")
-    public void startMailWorker(int workerId) {
-        log.info("[EmailService] - EmailWorker 메일 발송 워커 가동 시작");
-        while (true) {
-            try {
-                // BRPOP!
-                String task = redisTemplate.opsForList().rightPop(QUEUE_KEY, 5, TimeUnit.SECONDS);
-
-                if (task != null) {
-                    String[] data = task.split(":");
-                    sendEmail(data[0], data[1]);
-                }
-                /*if (task == null && workerId == 0) {
-                    log.info("[EmailService] (worker {}) - no email to send!",  workerId);
-                }*/
-            } catch (Exception e) {
-                log.error("[EmailService] - EmailWorker {} Error, retry after 1s... ", workerId, e);
-                try {
-                    Thread.sleep(1000);
-                }
-                catch (InterruptedException ignored) { }
-            }
-        }
+    /**
+     * (measure/s1-raw) 원시 구조 — 요청 스레드에서 바로 비동기 발송을 던진다. 큐도 워커도 없다.
+     *
+     * Redis 저장을 <b>이 비동기 경로 안에서</b> 하는 것이 핵심이다. 호출부의 중복 검사와 저장 사이가
+     * 스레드 경계로 벌어져, 동시 요청 두 건이 모두 검사를 통과하고 각각 메일을 보내게 된다.
+     * 포트폴리오 p23 이 지목한 "나노초 단위 다른 스레드 접근" 문제가 바로 이 창이다.
+     */
+    @Async("rawMailExecutor")
+    public void sendEmailAsync(String email, String code) {
+        redisTemplate.opsForValue().set(email, code, Duration.ofMinutes(3));
+        sendEmail(email, code);
     }
 
     public void sendEmail(String email, String code) {
