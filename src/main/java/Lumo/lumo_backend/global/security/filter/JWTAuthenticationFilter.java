@@ -5,6 +5,7 @@ import Lumo.lumo_backend.global.exception.GeneralException;
 import Lumo.lumo_backend.global.security.jwt.JWT;
 import Lumo.lumo_backend.global.security.handler.SecurityErrorResponder;
 import Lumo.lumo_backend.global.security.jwt.JWTProvider;
+import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetailsService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -103,6 +104,19 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
         try{
             if(jwtProvider.validateToken(accessToken)){ // 올바르지 않거나
 
+                /*
+                 * 인증에는 AT 만 허용
+                 *
+                 * 이전에는 종류를 구분하지 않아 RT 를 Authorization 헤더에 넣으면 그대로 인증됨을 확인
+                 * typ 클레임을 심는 것만으로는 아무것도 막지 못한다 — 실제로 닫히는 지점은 여기다.
+                 *
+                 * C-3 이전에 발급된 토큰은 typ 이 없어 null 이고, 여기서 전부 거부.
+                 */
+                if (!JWTProvider.TOKEN_TYPE_ACCESS.equals(jwtProvider.getTokenType(accessToken))) {
+                    log.warn("[JWTAuthenticationFilter] - Not an access token");
+                    throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
+                }
+
                 Timer.Sample blacklistSample = Timer.start(meterRegistry);
                 String isBlackListed;
                 try {
@@ -188,10 +202,25 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
             throw new GeneralException(ErrorCode.CANNOT_FOUND_RT);
         }
 
+        /*
+         * (20260821 C-3) 재발급에는 RT 만 허용한다.
+         *
+         * 문자열 일치만 보던 이전 로직은 "저장된 값과 같은가"만 확인했다. 두 토큰이 구분되지 않던
+         * 시절에는 그것으로 충분해 보였지만, 종류를 나눈 이상 여기서도 확인해야 대칭이 맞는다.
+         * 만료·변조된 RT 는 parseClaims 가 GeneralException 을 던져 401 로 나간다(재로그인 유도).
+         */
+        if (requestRT != null && !JWTProvider.TOKEN_TYPE_REFRESH.equals(jwtProvider.getTokenType(requestRT))) {
+            log.warn("[JWTAuthenticationFilter] - Not a refresh token");
+            throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
+        }
+
         if (requestRT != null && requestRT.equals(savedRT)){
             UserDetails userDetails = customUserDetailsService.loadUserByUsername(username);
             Authentication authentication = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
-            JWT newJWT = jwtProvider.generateToken(authentication);
+            // C-3 로 generateToken 이 memberId 를 요구한다. 이 경로는 방금 DB 에서 회원을 읽었으므로
+            // 바로 꺼낼 수 있다. (G-6 이후에는 클레임의 mid 를 그대로 넘기게 된다)
+            Long memberId = ((CustomUserDetails) userDetails).getMember().getId();
+            JWT newJWT = jwtProvider.generateToken(authentication, memberId);
 
             // AT 덮어쓰기
             response.setHeader("Authorization", "Bearer " + newJWT.getAccessToken());

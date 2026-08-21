@@ -25,9 +25,31 @@ import java.util.stream.Collectors;
 @Component
 public class JWTProvider {
 
-    // 일단 1시간으로 세팅
-    private static final Long ACCESS_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 60;
-    private static final Long REFRESH_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 60;
+    /*
+     * AT 와 RT 를 실제로 구분
+     * - 이전에는 두 토큰이 같은 서명키·같은 클레임(sub, auth)·같은 만료(1시간)로 발급됐다.
+     * - 이러면 RT/AT 구분 없이 인증 관련 API가 통과... (RT에 AT 넣어도 통과)
+     *
+     * AT 수명 단축(15분)은 여기서 하지 않는다. 그건 G-8 이고 블랙리스트 부담이 바뀌는
+     *    측정 대상이라, 함께 넣으면 Phase B 에서 기여도가 섞인다.
+     */
+    private static final Long ACCESS_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 60;          // 1시간
+    private static final Long REFRESH_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 60 * 24 * 7; // 7일 — 쿠키 maxAge 와 일치
+
+    /** 토큰 종류 Claim. 이 값이 없거나 기대와 다르면 해당 경로에서 거부 */
+    public static final String CLAIM_TOKEN_TYPE = "typ";
+    public static final String TOKEN_TYPE_ACCESS = "access";
+    public static final String TOKEN_TYPE_REFRESH = "refresh";
+
+    /*
+     * 회원 PK 클레임.
+     *
+     * C-3 시점에는 아무도 읽지 않는다. 그런데도 지금 심는 이유는 G-6(클레임 확장) 때문이다.
+     * 클레임 스키마가 바뀌면 기존 발급 토큰이 전부 무효가 되어 전 사용자가 재로그인해야 하는데,
+     * C-3 와 G-6 에서 각각 바꾸면 그 일이 두 번 일어난다. 클레임 "추가"는 하위호환이므로
+     * 지금 넣어두고 G-6 에서 읽기만 시작한다.
+     */
+    public static final String CLAIM_MEMBER_ID = "mid";
 
     private final Key key;
     private final CustomUserDetailsService customUserDetailsService;
@@ -69,7 +91,7 @@ public class JWTProvider {
      * 실질적인 JWT 반환 메서드!
      * Service -> login 메서드에서 사용
      * */
-    public JWT generateToken (Authentication authentication){
+    public JWT generateToken (Authentication authentication, Long memberId){
         String authorities = authentication.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
                 .collect(Collectors.joining(","));
@@ -78,11 +100,10 @@ public class JWTProvider {
 
         long now = (new Date()).getTime();
 
-        Date accessTokenExpire = new Date(now + ACCESS_TOKEN_EXPIRE_TIME);
-        String accessToken = createNewToken(username, authorities, accessTokenExpire);
-
-        Date refreshTokenExpire = new Date(now + REFRESH_TOKEN_EXPIRE_TIME);
-        String refreshToken = createNewToken(username, authorities, refreshTokenExpire);
+        String accessToken = createAccessToken(username, authorities, memberId,
+                new Date(now + ACCESS_TOKEN_EXPIRE_TIME));
+        String refreshToken = createRefreshToken(username, authorities, memberId,
+                new Date(now + REFRESH_TOKEN_EXPIRE_TIME));
 
         return JWT.builder()
                 .grantType("Bearer")
@@ -91,14 +112,40 @@ public class JWTProvider {
                 .build();
     }
 
-    public String createNewToken(String email, String authorities, Date expireDate){
+    public String createAccessToken(String email, String authorities, Long memberId, Date expireDate){
+        return buildToken(email, authorities, memberId, expireDate, TOKEN_TYPE_ACCESS);
+    }
+
+    public String createRefreshToken(String email, String authorities, Long memberId, Date expireDate){
+        return buildToken(email, authorities, memberId, expireDate, TOKEN_TYPE_REFRESH);
+    }
+
+    private String buildToken(String email, String authorities, Long memberId, Date expireDate, String tokenType){
         return Jwts.builder()
-//                .claim("username", email)
                 .subject(email) // 표준 필드로 수정
                 .claim("auth", authorities != null ? authorities : "ROLE_USER") // authorities 있는 경우 Member 필드의 Role 반환
+                .claim(CLAIM_TOKEN_TYPE, tokenType)
+                .claim(CLAIM_MEMBER_ID, memberId) // G-6 대비 선반영 — 지금은 아무도 읽지 않는다
                 .expiration(expireDate)
                 .signWith(key)
                 .compact();
+    }
+
+    /**
+     * 토큰의 종류를 반환한다. 서명·형식이 깨졌거나 만료됐으면 {@link GeneralException} 을 던진다.
+     *
+     * C-3 이전에 발급된 토큰에는 typ 클레임이 없어 {@code null} 이 반환된다.
+     * 호출부는 이를 "유효하지 않은 토큰"으로 취급해야 한다 — 배포 시점의 기존 토큰은 전부 무효다.
+     */
+    public String getTokenType(String token){
+        Object type = parseClaims(token).get(CLAIM_TOKEN_TYPE);
+        return type != null ? type.toString() : null;
+    }
+
+    /** 만료된 토큰의 클레임에서 종류를 읽는다. 만료 자체는 정상 흐름이므로 예외를 던지지 않는다. */
+    public String getTokenType(Claims claims){
+        Object type = claims.get(CLAIM_TOKEN_TYPE);
+        return type != null ? type.toString() : null;
     }
 
 

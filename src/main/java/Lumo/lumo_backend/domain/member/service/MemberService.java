@@ -231,7 +231,7 @@ public class MemberService {
 
         List<SimpleGrantedAuthority> authorities = Collections.singletonList(new SimpleGrantedAuthority(member.getRole().toString()));
         Authentication authentication = new UsernamePasswordAuthenticationToken(member.getEmail(), member.getPassword(), authorities);
-        JWT jwt = jwtProvider.generateToken(authentication);
+        JWT jwt = jwtProvider.generateToken(authentication, member.getId()); // C-3: mid 클레임용
 
         // TTL 은 RT 자체의 exp 에서 역산한다 (H-2).
         // TTL 없이 set 하면 로그아웃하지 않은 사용자의 키가 영구히 남아 회원 수에 비례해 단조 증가한다.
