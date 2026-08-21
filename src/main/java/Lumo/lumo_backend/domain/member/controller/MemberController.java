@@ -46,7 +46,7 @@ public class MemberController {
     @GetMapping("/login")
     // @Operation(summary = "로그인 방식 조회 API", description = "사용자가 로그인한 방식을 조회하는 API 입니다.")
     public APIResponse<MemberRespDTO.GetLoginDTO> getLoginMethod(@AuthenticationPrincipal CustomUserDetails userDetails) {
-        return APIResponse.onSuccess(memberService.getLogin(userDetails.getMember()), MemberSuccessCode.GET_LOGIN_SUCCESS); // 로그인 방식 리턴
+        return APIResponse.onSuccess(memberService.getLogin(userDetails.getUsername()), MemberSuccessCode.GET_LOGIN_SUCCESS); // 로그인 방식 리턴
     }
 
     @PostMapping("/login")
@@ -79,7 +79,7 @@ public class MemberController {
             throw new MemberException(MemberErrorCode.CANT_FOUND_MEMBER);
         }
 
-        memberService.logout(bearerToken.substring(7).trim(), userDetails.getMember().getId());
+        memberService.logout(bearerToken.substring(7).trim(), userDetails.getMemberId());
 
         return APIResponse.onSuccess(
                 MemberRespDTO.SimpleAPIRespDTO.builder().isSuccess(true).build(),
@@ -144,7 +144,7 @@ public class MemberController {
     //    @GetMapping("/mission-history")
 //    @Operation(summary = "내 미션 수행 기록 조회", description = "사용자가 진행했던 미션의 기록을 모두 확인하는 API 입니다.")
     public APIResponse<Object> getMissionHistory(@AuthenticationPrincipal CustomUserDetails userDetails) {
-//        return APIResponse.onSuccess(memberService.getMissionHistory(userDetails.getMember().getId()), MemberSuccessCode.TEST_SUCCESS);
+//        return APIResponse.onSuccess(memberService.getMissionHistory(userDetails.getMemberId()), MemberSuccessCode.TEST_SUCCESS);
         return null;
     }
 

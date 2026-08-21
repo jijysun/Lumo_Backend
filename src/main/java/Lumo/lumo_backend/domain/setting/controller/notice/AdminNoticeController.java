@@ -33,7 +33,6 @@ public class AdminNoticeController {
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
             @RequestBody @Valid NoticeCreateRequestDTO noticeCreateRequestDTO
     ) {
-        verifyAdmin(customUserDetails.getMember());
         NoticeResponseDTO noticeResponseDTO = noticeService.create(noticeCreateRequestDTO);
         return APIResponse.onSuccess(noticeResponseDTO, SettingSuccessCode.NOTICE_CREATE_SUCCESS);
     }
@@ -45,7 +44,6 @@ public class AdminNoticeController {
             @PathVariable Long noticeId,
             @RequestBody @Valid NoticeCreateRequestDTO noticeCreateRequestDTO
     ) {
-        verifyAdmin(customUserDetails.getMember());
         NoticeResponseDTO noticeResponseDTO = noticeService.update(noticeId, noticeCreateRequestDTO);
         return APIResponse.onSuccess(noticeResponseDTO, SettingSuccessCode.NOTICE_UPDATE_SUCCESS);
     }
@@ -57,15 +55,16 @@ public class AdminNoticeController {
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
             @PathVariable Long noticeId
     ) {
-        verifyAdmin(customUserDetails.getMember());
         noticeService.softDelete(noticeId);
         return APIResponse.onSuccess(null, SettingSuccessCode.NOTICE_DELETE_SUCCESS);
     }
 
-    private void verifyAdmin(Member member) {
-        if(member.getRole()!= MemberRole.ADMIN){
-            throw new GeneralException(ErrorCode.AUTH_FORBIDDEN);
-        }
-    }
+    /*
+     * (G-6) verifyAdmin 제거.
+     *
+     * C-1 수정 때 SecurityConfig 에 .requestMatchers("/api/admin/**").hasAuthority("ADMIN") 을
+     * 걸어두었으므로 이 컨트롤러에 도달하는 요청은 이미 ADMIN 이다. 즉 이 검사는 절대 발동하지 않는
+     * 죽은 방어 코드였다. 권한 판정은 SecurityConfig 한 곳에서만 하는 편이 추적도 쉽다.
+     */
 
 }

@@ -76,13 +76,19 @@ public class MemberService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
 
-    public MemberRespDTO.GetLoginDTO getLogin(Member member) {
+    /**
+     * (G-6) 시그니처를 Member -> String email 로 바꿨다.
+     *
+     * 이전에는 필터가 방금 조회한 회원을 받아 email 만 꺼낸 뒤 findByEmail 로 <b>다시 조회</b>했다.
+     * 인증 경로에서 DB 조회가 사라지면서 이 중복이 자연히 정리된다. email 은 JWT 의 sub 에 있다.
+     */
+    public MemberRespDTO.GetLoginDTO getLogin(String email) {
 
-        if (member == null) {
+        if (email == null || email.isBlank()) {
             throw new MemberException(MemberErrorCode.CANT_FOUND_MEMBER);
         }
 
-        Optional<Member> byEmail = memberRepository.findByEmail(member.getEmail());
+        Optional<Member> byEmail = memberRepository.findByEmail(email);
         if (byEmail.isPresent()) {
             return MemberRespDTO.GetLoginDTO.builder().login(byEmail.get().getLogin()).build();
         } else {

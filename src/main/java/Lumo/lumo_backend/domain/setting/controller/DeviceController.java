@@ -34,7 +34,7 @@ public class DeviceController {
             @RequestBody MemberDeviceCreateReqDTO request
     ) {
 
-        memberDeviceService.create(userDetails.getMember().getId(), request);
+        memberDeviceService.create(userDetails.getMemberId(), request);
         return APIResponse.onSuccess(null, SettingSuccessCode.DEVICE_CREATE_SUCCESS);
     }
 
@@ -43,7 +43,7 @@ public class DeviceController {
     public APIResponse<MemberDeviceResDTO> getList(
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
-        return APIResponse.onSuccess(memberDeviceService.getList(userDetails.getMember().getId()), SettingSuccessCode.DEVICE_LIST_SUCCESS);
+        return APIResponse.onSuccess(memberDeviceService.getList(userDetails.getMemberId()), SettingSuccessCode.DEVICE_LIST_SUCCESS);
     }
 
     @PatchMapping("/{deviceId}")
@@ -54,7 +54,7 @@ public class DeviceController {
             @RequestBody MemberDeviceUpdateReqDTO request
     ) {
 
-        memberDeviceService.update(userDetails.getMember().getId(), request, deviceId);
+        memberDeviceService.update(userDetails.getMemberId(), request, deviceId);
         return APIResponse.onSuccess(null, SettingSuccessCode.DEVICE_UPDATE_SUCCESS);
     }
 
@@ -64,7 +64,7 @@ public class DeviceController {
             @PathVariable Long deviceId
     ) {
 
-        memberDeviceService.delete(userDetails.getMember().getId(), deviceId);
+        memberDeviceService.delete(userDetails.getMemberId(), deviceId);
         return APIResponse.onSuccess(null, SettingSuccessCode.DEVICE_DELETE_SUCCESS);
     }
 

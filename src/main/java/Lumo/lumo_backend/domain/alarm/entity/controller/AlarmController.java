@@ -47,7 +47,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @Valid @RequestBody AlarmCreateRequestDto requestDto
     ) {
-        AlarmResponseDto response = alarmService.createAlarm(userDetails.getMember(), requestDto);
+        AlarmResponseDto response = alarmService.createAlarm(userDetails.getMemberId(), requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_CREATED);
     }
 
@@ -60,7 +60,7 @@ public class AlarmController {
     public APIResponse<List<AlarmResponseDto>> getMyAlarms(
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
-        List<AlarmResponseDto> response = alarmService.getMyAlarms(userDetails.getMember());
+        List<AlarmResponseDto> response = alarmService.getMyAlarms(userDetails.getMemberId());
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_LIST_RETRIEVED);
     }
 
@@ -74,7 +74,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long alarmId
     ) {
-        AlarmResponseDto response = alarmService.getAlarmDetail(userDetails.getMember(), alarmId);
+        AlarmResponseDto response = alarmService.getAlarmDetail(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_RETRIEVED);
     }
 
@@ -90,7 +90,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long alarmId
     ) {
-        alarmService.deleteAlarm(userDetails.getMember(), alarmId);
+        alarmService.deleteAlarm(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(null, AlarmSuccessCode.ALARM_DELETED);
     }
 
@@ -104,7 +104,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long alarmId
     ) {
-        AlarmResponseDto response = alarmService.toggleAlarm(userDetails.getMember(), alarmId);
+        AlarmResponseDto response = alarmService.toggleAlarm(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_TOGGLED);
     }
 
@@ -118,7 +118,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long alarmId
     ) {
-        List<String> response = alarmService.getRepeatDays(userDetails.getMember(), alarmId);
+        List<String> response = alarmService.getRepeatDays(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.REPEAT_DAYS_RETRIEVED);
     }
 
@@ -133,7 +133,7 @@ public class AlarmController {
             @PathVariable Long alarmId,
             @Valid @RequestBody RepeatDaysUpdateRequestDto requestDto
     ) {
-        List<String> response = alarmService.updateRepeatDays(userDetails.getMember(), alarmId, requestDto);
+        List<String> response = alarmService.updateRepeatDays(userDetails.getMemberId(), alarmId, requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.REPEAT_DAYS_UPDATED);
     }
 
@@ -148,7 +148,7 @@ public class AlarmController {
             @PathVariable Long alarmId
     ) {
         AlarmResponseDto.SnoozeSettingResponseDto response =
-                alarmService.getSnoozeSettings(userDetails.getMember(), alarmId);
+                alarmService.getSnoozeSettings(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.SNOOZE_RETRIEVED);
     }
 
@@ -164,7 +164,7 @@ public class AlarmController {
             @Valid @RequestBody AlarmCreateRequestDto.SnoozeSettingDto requestDto
     ) {
         AlarmResponseDto.SnoozeSettingResponseDto response =
-                alarmService.updateSnoozeSettings(userDetails.getMember(), alarmId, requestDto);
+                alarmService.updateSnoozeSettings(userDetails.getMemberId(), alarmId, requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.SNOOZE_UPDATED);
     }
 
@@ -179,7 +179,7 @@ public class AlarmController {
             @PathVariable Long alarmId
     ) {
         AlarmResponseDto.SnoozeSettingResponseDto response =
-                alarmService.toggleSnooze(userDetails.getMember(), alarmId);
+                alarmService.toggleSnooze(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.SNOOZE_TOGGLED);
     }
 
@@ -193,7 +193,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long alarmId
     ) {
-        MissionSettingDto response = alarmService.getMissionSettings(userDetails.getMember(), alarmId);
+        MissionSettingDto response = alarmService.getMissionSettings(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.MISSION_RETRIEVED);
     }
 
@@ -209,7 +209,7 @@ public class AlarmController {
             @Valid @RequestBody MissionSettingDto requestDto
     ) {
         MissionSettingDto response =
-                alarmService.updateMissionSettings(userDetails.getMember(), alarmId, requestDto);
+                alarmService.updateMissionSettings(userDetails.getMemberId(), alarmId, requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.MISSION_UPDATED);
     }
 
@@ -224,7 +224,7 @@ public class AlarmController {
             @PathVariable Long alarmId
     ) {
         List<MissionContentResponseDto> response =
-                alarmService.startMission(userDetails.getMember(), alarmId);
+                alarmService.startMission(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.MISSION_STARTED);
     }
 
@@ -240,7 +240,7 @@ public class AlarmController {
             @Valid @RequestBody MissionSubmitDto requestDto
     ) {
         MissionSubmitResponseDto response =
-                alarmService.submitMissionAnswer(userDetails.getMember(), alarmId, requestDto);
+                alarmService.submitMissionAnswer(userDetails.getMemberId(), alarmId, requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.MISSION_SUBMITTED);
     }
 
@@ -256,7 +256,7 @@ public class AlarmController {
             @Valid @RequestBody WalkProgressDto requestDto
     ) {
         WalkProgressResponseDto response =
-                alarmService.updateWalkProgress(userDetails.getMember(), alarmId, requestDto);
+                alarmService.updateWalkProgress(userDetails.getMemberId(), alarmId, requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.MISSION_WALK_UPDATED);
     }
 
@@ -271,7 +271,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
         List<MissionHistoryResponseDto> response =
-                alarmService.getMyMissionHistory(userDetails.getMember());
+                alarmService.getMyMissionHistory(userDetails.getMemberId());
         return APIResponse.onSuccess(response, AlarmSuccessCode.MISSION_HISTORY_RETRIEVED);
     }
 
@@ -284,7 +284,7 @@ public class AlarmController {
     public APIResponse<List<AlarmLogResponseDto>> getMyAlarmLogs(
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
-        List<AlarmLogResponseDto> response = alarmService.getMyAlarmLogs(userDetails.getMember());
+        List<AlarmLogResponseDto> response = alarmService.getMyAlarmLogs(userDetails.getMemberId());
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_LOG_RETRIEVED);
     }
 
@@ -299,7 +299,7 @@ public class AlarmController {
             @PathVariable Long alarmId
     ) {
         List<AlarmLogResponseDto> response =
-                alarmService.getAlarmLogs(userDetails.getMember(), alarmId);
+                alarmService.getAlarmLogs(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_LOG_RETRIEVED);
     }
 
@@ -313,7 +313,7 @@ public class AlarmController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long alarmId
     ) {
-        AlarmLogResponseDto response = alarmService.triggerAlarm(userDetails.getMember(), alarmId);
+        AlarmLogResponseDto response = alarmService.triggerAlarm(userDetails.getMemberId(), alarmId);
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_TRIGGERED);
     }
 
@@ -328,7 +328,7 @@ public class AlarmController {
             @PathVariable Long alarmId,
             @Valid @RequestBody AlarmDismissRequestDto requestDto
     ) {
-        AlarmLogResponseDto response = alarmService.dismissAlarm(userDetails.getMember(), alarmId, requestDto);
+        AlarmLogResponseDto response = alarmService.dismissAlarm(userDetails.getMemberId(), alarmId, requestDto);
         return APIResponse.onSuccess(response, AlarmSuccessCode.ALARM_DISMISSED);
     }
 
@@ -341,7 +341,7 @@ public class AlarmController {
     public APIResponse<MemberStatisticsResponseDto> getMyStatistics(
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
-        MemberStatisticsResponseDto response = alarmService.getMyStatistics(userDetails.getMember());
+        MemberStatisticsResponseDto response = alarmService.getMyStatistics(userDetails.getMemberId());
         return APIResponse.onSuccess(response, AlarmSuccessCode.STATISTICS_RETRIEVED);
     }
 }

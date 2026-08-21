@@ -2,7 +2,7 @@ package Lumo.lumo_backend.global.security.jwt;
 
 import Lumo.lumo_backend.global.apiResponse.status.ErrorCode;
 import Lumo.lumo_backend.global.exception.GeneralException;
-import Lumo.lumo_backend.global.security.userDetails.CustomUserDetailsService;
+import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 import io.jsonwebtoken.security.SecurityException;
@@ -52,13 +52,12 @@ public class JWTProvider {
     public static final String CLAIM_MEMBER_ID = "mid";
 
     private final Key key;
-    private final CustomUserDetailsService customUserDetailsService;
 
 
     /** HS256 최소 키 길이. RFC 7518 §3.2 — 키는 해시 출력 길이(256bit) 이상이어야 한다. */
     private static final int MIN_KEY_BYTES = 32;
 
-    public JWTProvider(@Value("${jwt.secret.key}") String key, CustomUserDetailsService customUserDetailsService) {
+    public JWTProvider(@Value("${jwt.secret.key}") String key) {
         /*
          * (20260816 C-4 수정) Base64 "인코딩" → "디코딩".
          *
@@ -84,7 +83,8 @@ public class JWTProvider {
         }
 
         this.key = Keys.hmacShaKeyFor(keyBytes);
-        this.customUserDetailsService = customUserDetailsService; // 커스텀 UserDetailsService 를 통한 DB 조회
+        // (G-6) CustomUserDetailsService 의존성을 제거했다. 인증 경로가 DB 를 타지 않는다는 사실을
+        // 타입 수준에서 강제하기 위해서다 — 필드가 남아 있으면 언제든 다시 호출될 수 있다.
     }
 
     /**
@@ -174,35 +174,59 @@ public class JWTProvider {
         return false;
     }
 
+    /**
+     * (20260821 G-6) 클레임만으로 인증 주체를 조립한다. <b>DB 를 치지 않는다.</b>
+     *
+     * <p>이전에는 여기서 {@code customUserDetailsService.loadUserByUsername()} 을 호출해
+     * 인증된 <b>모든 요청</b>이 {@code findByEmail} 을 한 번씩 탔다. JWT 가 이미 sub(email)와
+     * auth(권한)를 담고 있는데도 DB 를 다시 물어보는, stateless 의 이점을 스스로 버리는 구조였다.
+     * A-1 계측 기준 그 조회가 인증 필터 전체 시간의 <b>61.7%</b>(2.397ms / 3.884ms) 였다.
+     *
+     * <p><b>대가</b>: 탈퇴·권한 변경·정지가 DB 에 반영돼도 <b>AT 수명(현재 1시간) 동안은
+     * 인증 경로가 알지 못한다.</b> 이것이 G-8(AT 수명 단축)의 근거다. 다만 재발급 경로
+     * ({@code JWTAuthenticationFilter.handleExpiredAccessToken})는 여전히 DB 를 조회하므로,
+     * 반영 지연의 상한은 AT 수명으로 묶인다.
+     *
+     * <p>개선 확인: {@code auth.userdetails.load} 의 {@code _count} 가 인증 요청에서는 더 이상
+     * 증가하지 않고 로그인·재발급에서만 오르면 성공이다.
+     */
     public Authentication getAuthentication(String accessToken) {
-        Claims claims = parseClaims(accessToken);
+        return getAuthentication(parseClaims(accessToken));
+    }
 
-        Object authClaimObject = claims.get("auth") != null ? claims.get("auth") : "";
+    /** 이미 파싱한 Claims 를 재사용하는 경로. 필터가 메서드 사용 */
+    public Authentication getAuthentication(Claims claims) {
 
-//        log.info("authClaimObject: {}, ", authClaimObject.toString());
+        Object authClaim = claims.get("auth");
+        String authoritiesString = (authClaim != null) ? authClaim.toString() : "";
 
-
-        String authoritiesString = (authClaimObject != null) ? authClaimObject.toString() : "";
-
-//        log.info("authoritiesString: {}", authoritiesString);
-
-        if (authoritiesString.isEmpty() || claims.get("auth") == null) {
+        if (authoritiesString.isEmpty()) {
             // 맨 RuntimeException 은 필터의 catch(GeneralException) 에 걸리지 않아
             // 그대로 컨테이너까지 전파돼 500 HTML 이 나갔다 (H-1).
             throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
         }
 
-        // 표준 필드로 변경
-//        log.info("[JWTProvider - getAuthentication()] email: {}", claims.get("username", String.class));
+        Object memberIdClaim = claims.get(CLAIM_MEMBER_ID);
+        if (memberIdClaim == null) {
+            // C-3 이전에 발급된 토큰에는 mid 가 없다. 유효하지 않은 토큰으로 취급해 재로그인을 유도한다.
+            throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
+        }
+        // jackson 역직렬화 결과가 Integer 일 수 있어 Number 로 받는다.
+        Long memberId = ((Number) memberIdClaim).longValue();
 
-        // 계속 찍히는 관계로 처리
-//        log.info("[JWTProvider - getAuthentication()] email: {}", claims.getSubject());
-
-        UserDetails userDetails = customUserDetailsService.loadUserByUsername(claims.getSubject());
+        // DB 조회가 아닌, 직접 CustomUserDetails 조립
+        UserDetails userDetails = CustomUserDetails.fromClaims(memberId, claims.getSubject(), authoritiesString);
         return new UsernamePasswordAuthenticationToken(userDetails, "", userDetails.getAuthorities());
     }
 
-    private Claims parseClaims(String accessToken) {
+    /**
+     * (20260821) private -> public.
+     *
+     * C-3 로 typ 검증이 들어가면서 요청 1건당 파싱이 3회(validateToken · getTokenType ·
+     * getAuthentication)로 늘었다. HMAC 검증은 공짜가 아니고 이 경로는 인증된 모든 요청이 탄다.
+     * 호출부가 한 번만 파싱하고 Claims 를 재사용하도록 열어둔다.
+     */
+    public Claims parseClaims(String accessToken) {
         try{
             Claims claims = Jwts.parser()
                     .verifyWith((SecretKey) key)

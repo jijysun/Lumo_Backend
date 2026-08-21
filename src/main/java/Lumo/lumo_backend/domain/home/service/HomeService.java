@@ -25,8 +25,8 @@ public class HomeService {
     private final ToDoService toDoService;
     private final EncouragementTextLoader encouragementTextLoader;
 
-    public HomeResponseDTO get(Member member, LocalDate today) {
-        Member persistedMember = getPersistedMember(member);
+    public HomeResponseDTO get(Long memberId, LocalDate today) {
+        Member persistedMember = getPersistedMember(memberId);
 
         Encouragement encouragement = encouragementTextLoader.getTodayEncouragement();
         List<String> todo = toDoService.findTodayThreeToDo(persistedMember, today);
@@ -39,8 +39,10 @@ public class HomeService {
                 .build();
     }
 
-    private Member getPersistedMember(Member member) {
-        return memberRepository.findById(member.getId())
+    private Member getPersistedMember(Long memberId) {
+        // (G-6) 이 서비스는 원래부터 회원을 다시 조회하고 있었다. 인증 필터의 조회가 사라진 것과 별개로
+        // 여기서는 엔티티 필드가 필요하므로 실제 로드가 맞다.
+        return memberRepository.findById(memberId)
                 .orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
     }
 }

@@ -33,7 +33,10 @@ public class SubroutineService {
     private final SubroutineRepository subroutineRepository;
 
     @Transactional
-    public Long createSubroutine (Member member, Long routineId, String title) {
+    public Long createSubroutine (Long memberId, Long routineId, String title) {
+        // (G-6) 컨트롤러가 더 이상 Member 엔티티를 넘기지 않는다. 프록시는 SELECT 를 발생시키지 않으며,
+        // 연관 설정과 FK 비교에는 식별자만 있으면 충분하다.
+        Member member = memberRepository.getReferenceById(memberId);
         Member member1 = memberRepository.findById(member.getId()).orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
         Routine routine = routineRepository.findById(routineId).orElseThrow(() -> new RoutineException(RoutineErrorCode.ROUTINE_NOT_FOUND));
         Subroutine savedSubroutine = subroutineRepository.save(new Subroutine(title, routine));
@@ -43,19 +46,22 @@ public class SubroutineService {
     }
 
     @Transactional
-    public void deleteSubroutine (Member member, Long subroutineId){
+    public void deleteSubroutine (Long memberId, Long subroutineId){
+        // (G-6) 컨트롤러가 더 이상 Member 엔티티를 넘기지 않는다. 프록시는 SELECT 를 발생시키지 않으며,
+        // 연관 설정과 FK 비교에는 식별자만 있으면 충분하다.
+        Member member = memberRepository.getReferenceById(memberId);
         Member member1 = memberRepository.findById(member.getId()).orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
         subroutineRepository.deleteById(subroutineId); ///  deleteById vs delete?
     }
 
     @Transactional
-    public void renameSubroutine(Member member, Long subroutineId, String title) {
+    public void renameSubroutine(Long memberId, Long subroutineId, String title) {
         Subroutine subroutine = subroutineRepository.findById(subroutineId).orElseThrow(() -> new SubroutineException(SubroutineErrorCode.SUBROUTINE_NOT_FOUND));
         subroutine.renameSubroutine(title);
     }
 
     @Transactional
-    public void checkSubroutine ( Member member,  Long subroutineId) {
+    public void checkSubroutine ( Long memberId,  Long subroutineId) {
         Subroutine subroutine = subroutineRepository.findById(subroutineId).orElseThrow(() -> new SubroutineException(SubroutineErrorCode.SUBROUTINE_NOT_FOUND));
         subroutine.checkSubroutine();
         subroutine.increateCnt();

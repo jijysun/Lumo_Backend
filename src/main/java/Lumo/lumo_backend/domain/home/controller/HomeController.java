@@ -27,7 +27,7 @@ public class HomeController {
             @AuthenticationPrincipal CustomUserDetails customUserDetails,
             @RequestParam LocalDate today
             ) {
-        HomeResponseDTO homeResponseDTO = homeService.get(customUserDetails.getMember(), today);
+        HomeResponseDTO homeResponseDTO = homeService.get(customUserDetails.getMemberId(), today);
         return APIResponse.onSuccess(homeResponseDTO, HomeSuccessCode.HOME_GET_SUCCESS);
     }
 }

@@ -112,7 +112,10 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                  *
                  * C-3 이전에 발급된 토큰은 typ 이 없어 null 이고, 여기서 전부 거부.
                  */
-                if (!JWTProvider.TOKEN_TYPE_ACCESS.equals(jwtProvider.getTokenType(accessToken))) {
+                // 파싱 1회로 통합한다. 이 Claims 를 typ 검증과 인증 주체 조립에 함께 쓴다.
+                Claims claims = jwtProvider.parseClaims(accessToken);
+
+                if (!JWTProvider.TOKEN_TYPE_ACCESS.equals(jwtProvider.getTokenType(claims))) {
                     log.warn("[JWTAuthenticationFilter] - Not an access token");
                     throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
                 }
@@ -129,7 +132,7 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                     throw new GeneralException(ErrorCode.BLACKLISTED_TOKEN);
                 }
 
-                Authentication authentication = jwtProvider.getAuthentication(accessToken);
+                Authentication authentication = jwtProvider.getAuthentication(claims);
                 if (authentication != null) {
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }

@@ -40,7 +40,7 @@ public class ToDoController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestBody @Valid ToDoCreateRequestDTO toDoCreateRequestDTO
     ) {
-        ToDoResponseDTO toDoResponseDTO = toDoService.create(userDetails.getMember(), toDoCreateRequestDTO);
+        ToDoResponseDTO toDoResponseDTO = toDoService.create(userDetails.getMemberId(), toDoCreateRequestDTO);
         return APIResponse.onSuccess(toDoResponseDTO, ToDoSuccessCode.CREATE_TODO_SUCCESS);
     }
 
@@ -51,7 +51,7 @@ public class ToDoController {
             @PathVariable Long toDoId,
             @RequestBody @Valid ToDoUpdateRequestDTO toDoUpdateRequestDTO
     ) {
-        ToDoResponseDTO toDoResponseDTO = toDoService.update(userDetails.getMember(), toDoId, toDoUpdateRequestDTO);
+        ToDoResponseDTO toDoResponseDTO = toDoService.update(userDetails.getMemberId(), toDoId, toDoUpdateRequestDTO);
         return APIResponse.onSuccess(toDoResponseDTO, ToDoSuccessCode.UPDATE_TODO_SUCCESS);
     }
 
@@ -61,7 +61,7 @@ public class ToDoController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long toDoId
     ) {
-        toDoService.delete(userDetails.getMember(), toDoId);
+        toDoService.delete(userDetails.getMemberId(), toDoId);
         return APIResponse.onSuccess(null, ToDoSuccessCode.DELETE_TODO_SUCCESS);
     }
 
@@ -71,7 +71,7 @@ public class ToDoController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam LocalDate eventDate
     ) {
-        List<ToDoResponseDTO> toDoList = toDoService.findToDoListByEventDate(userDetails.getMember(), eventDate);
+        List<ToDoResponseDTO> toDoList = toDoService.findToDoListByEventDate(userDetails.getMemberId(), eventDate);
         return APIResponse.onSuccess(toDoList, ToDoSuccessCode.GET_TODO_SUCCESS);
     }
 
@@ -81,7 +81,7 @@ public class ToDoController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam LocalDate today
     ) {
-        String briefing = toDoService.getBriefing(userDetails.getMember(), today);
+        String briefing = toDoService.getBriefing(userDetails.getMemberId(), today);
         return APIResponse.onSuccess(briefing, ToDoSuccessCode.GET_TODO_SUCCESS);
     }
 }

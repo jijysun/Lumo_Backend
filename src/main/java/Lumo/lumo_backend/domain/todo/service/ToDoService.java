@@ -38,8 +38,8 @@ public class ToDoService {
     private final OpenAIClient openAIClient;
 
     @Transactional
-    public ToDoResponseDTO create(Member member, ToDoCreateRequestDTO toDoCreateRequestDTO) {
-        Member persistedMember = getPersistedMember(member);
+    public ToDoResponseDTO create(Long memberId, ToDoCreateRequestDTO toDoCreateRequestDTO) {
+        Member persistedMember = getPersistedMember(memberId);
 
         ToDo toDo = ToDo.builder()
                 .member(persistedMember)
@@ -52,8 +52,8 @@ public class ToDoService {
     }
 
     @Transactional
-    public ToDoResponseDTO update(Member member, Long toDoId, ToDoUpdateRequestDTO toDoUpdateRequestDTO) {
-        Member persistedMember = getPersistedMember(member);
+    public ToDoResponseDTO update(Long memberId, Long toDoId, ToDoUpdateRequestDTO toDoUpdateRequestDTO) {
+        Member persistedMember = getPersistedMember(memberId);
 
         ToDo toDo = toDoRepository.findById(toDoId)
                 .orElseThrow(() -> new ToDoException(ToDoErrorCode.NOT_FOUND));
@@ -69,8 +69,8 @@ public class ToDoService {
     }
 
     @Transactional
-    public void delete(Member member, Long toDoId) {
-        Member persistedMember = getPersistedMember(member);
+    public void delete(Long memberId, Long toDoId) {
+        Member persistedMember = getPersistedMember(memberId);
 
         ToDo toDo = toDoRepository.findById(toDoId)
                 .orElseThrow(() -> new ToDoException(ToDoErrorCode.NOT_FOUND));
@@ -83,8 +83,8 @@ public class ToDoService {
     }
 
     @Transactional(readOnly = true)
-    public List<ToDoResponseDTO> findToDoListByEventDate(Member member, LocalDate eventDate) {
-        Member persistedMember = getPersistedMember(member);
+    public List<ToDoResponseDTO> findToDoListByEventDate(Long memberId, LocalDate eventDate) {
+        Member persistedMember = getPersistedMember(memberId);
 
         return toDoRepository.findAllByMemberAndEventDate(persistedMember, eventDate);
     }
@@ -96,8 +96,8 @@ public class ToDoService {
     }
 
     @Transactional(readOnly = true)
-    public String getBriefing(Member member, LocalDate today) {
-        Member persistedMember = getPersistedMember(member);
+    public String getBriefing(Long memberId, LocalDate today) {
+        Member persistedMember = getPersistedMember(memberId);
 
         List<String> toDoList = toDoRepository.findContentByMemberAndEventDate(persistedMember, today);
         String todo = String.join(", ", toDoList);
@@ -128,8 +128,10 @@ public class ToDoService {
         }
     }
 
-    private Member getPersistedMember(Member member) {
-        return memberRepository.findById(member.getId())
+    private Member getPersistedMember(Long memberId) {
+        // (G-6) 이 서비스는 원래부터 회원을 다시 조회하고 있었다. 인증 필터의 조회가 사라진 것과 별개로
+        // 여기서는 엔티티 필드가 필요하므로 실제 로드가 맞다.
+        return memberRepository.findById(memberId)
                 .orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
     }
 }

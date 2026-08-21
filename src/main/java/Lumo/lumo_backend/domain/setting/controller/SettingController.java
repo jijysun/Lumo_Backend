@@ -32,7 +32,7 @@ public class SettingController {
             @AuthenticationPrincipal CustomUserDetails userDetail
     ) {
 
-        return APIResponse.onSuccess(memberSettingService.get(userDetail.getMember().getId()), SettingSuccessCode.SETTING_DETAIL_SUCCESS);
+        return APIResponse.onSuccess(memberSettingService.get(userDetail.getMemberId()), SettingSuccessCode.SETTING_DETAIL_SUCCESS);
     }
 
 
@@ -42,7 +42,7 @@ public class SettingController {
             @AuthenticationPrincipal CustomUserDetails userDetail,
             @RequestBody MemberSettingUpdateReqDTO request
     ) {
-        memberSettingService.update(userDetail.getMember().getId(), request);
+        memberSettingService.update(userDetail.getMemberId(), request);
         return APIResponse.onSuccess(null, SettingSuccessCode.SETTING_UPDATE_SUCCESS);
     }
 

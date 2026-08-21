@@ -29,7 +29,7 @@ public class StatController {
             @AuthenticationPrincipal CustomUserDetails userDetail
     ) {
 
-        return APIResponse.onSuccess(memberStatService.get(userDetail.getMember().getId()), SettingSuccessCode.STAT_DETAIL_SUCCESS);
+        return APIResponse.onSuccess(memberStatService.get(userDetail.getMemberId()), SettingSuccessCode.STAT_DETAIL_SUCCESS);
     }
 
 }
