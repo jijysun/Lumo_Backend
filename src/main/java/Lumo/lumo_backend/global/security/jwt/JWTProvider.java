@@ -19,6 +19,7 @@ import javax.crypto.SecretKey;
 import java.security.Key;
 import java.util.Base64;
 import java.util.Date;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -33,7 +34,19 @@ public class JWTProvider {
      * AT 수명 단축(15분)은 여기서 하지 않는다. 그건 G-8 이고 블랙리스트 부담이 바뀌는
      *    측정 대상이라, 함께 넣으면 Phase B 에서 기여도가 섞인다.
      */
-    private static final Long ACCESS_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 60;          // 1시간
+    /*
+     * (20260821 G-8) AT 1시간 -> 15분.
+     *
+     * 블랙리스트는 "AT 수명이 길다"는 문제를 매 요청 Redis 왕복으로 땜질한 것이었다.
+     * A-1 계측 기준 그 왕복이 인증 필터 시간의 26.2%, G-6 로 DB 조회가 사라진 뒤에는 59.8% 로
+     * 최대 몫이 됐다. 근본 처방은 조회를 최적화하는 것이 아니라 수명을 줄여 블랙리스트 자체를
+     * 불필요하게 만드는 것이다.
+     *
+     * 대가: 재발급 빈도가 4배가 된다(1시간 -> 15분). 재발급 경로는 DB 1회 + Redis 2~3회로
+     *      인증 경로보다 비싸므로, "AT 를 무조건 짧게"가 아니라 균형점이 있다. 15분은 출발점이고
+     *      Phase B 에서 재발급 빈도와 인증 지연을 함께 측정해 조정한다.
+     */
+    private static final Long ACCESS_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 15;          // 15분
     private static final Long REFRESH_TOKEN_EXPIRE_TIME = (long) 1000 * 60 * 60 * 24 * 7; // 7일 — 쿠키 maxAge 와 일치
 
     /** 토큰 종류 Claim. 이 값이 없거나 기대와 다르면 해당 경로에서 거부 */
@@ -122,6 +135,13 @@ public class JWTProvider {
 
     private String buildToken(String email, String authorities, Long memberId, Date expireDate, String tokenType){
         return Jwts.builder()
+                /*
+                 * JWT 는 같은 클레임이면 같은 바이트 -> sub·auth·typ·mid·exp 만으로 만들면 exp 의 해상도가 "초"이므로 같은 초에 발급된 두 토큰이 완전히 동일해지는 문제 발생.
+                 * - 그러면 RTR 회전이 사실상 no-op 가 되어(새 RT == 옛 RT) 재사용 감지가 성립 X (0821 로컬 테스트 확인)
+                 *
+                 * = 토큰마다 고유한 jti 를 넣어 발급 시점과 무관하게 유일성을 보장!
+                 */
+                .id(UUID.randomUUID().toString()) // jti
                 .subject(email) // 표준 필드로 수정
                 .claim("auth", authorities != null ? authorities : "ROLE_USER") // authorities 있는 경우 Member 필드의 Role 반환
                 .claim(CLAIM_TOKEN_TYPE, tokenType)

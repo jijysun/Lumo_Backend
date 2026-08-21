@@ -45,6 +45,10 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
     private final SecurityErrorResponder responder;
     private final MeterRegistry meterRegistry;
 
+    /** (G-9) 회전 직후 유예 창. 네트워크 재시도·동시 요청을 탈취로 오판하지 않기 위한 최소 구간. */
+    private static final String PREV_RT_PREFIX = "prev_rt:";
+    private static final long PREV_RT_GRACE_SECONDS = 20;
+
     /**
      * 인증 필터 전체 소요 시간, 여기만 히스토그램을 켠다 —
      * p95 가 필요한 건 전체뿐이고, 블루-그린 2컨테이너의 분위수를 서버에서 합산하려면
@@ -53,7 +57,6 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
     private Timer filterTimer;
 
     /** 블랙리스트 Redis 왕복. "제거할 가치가 있는가"를 판단할 근거가 된다. */
-    private Timer blacklistTimer;
 
     @PostConstruct
     void initMetrics() {
@@ -62,9 +65,6 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                 .publishPercentileHistogram()
                 .register(meterRegistry);
 
-        blacklistTimer = Timer.builder("auth.blacklist.lookup")
-                .description("블랙리스트 Redis 조회 소요 시간")
-                .register(meterRegistry);
     }
 
     @Override
@@ -120,17 +120,12 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                     throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
                 }
 
-                Timer.Sample blacklistSample = Timer.start(meterRegistry);
-                String isBlackListed;
-                try {
-                    isBlackListed = redisTemplate.opsForValue().get("blacklist:" + accessToken);
-                } finally {
-                    blacklistSample.stop(blacklistTimer);
-                }
-                if (isBlackListed != null){
-                    log.warn("[JWTAuthenticationFilter] - Using BlackListed Token!");
-                    throw new GeneralException(ErrorCode.BLACKLISTED_TOKEN);
-                }
+                /*
+                 * 블랙리스트 조회 제거
+                 * - AT가 1시간이라 로그아웃 후에도 유효하다는 문제 발생
+                 * - 15분으로 줄이면 노출 창이 짧아짐 + Redis 왕복 근거가 사라짐
+                 * - 어쨌든 15분이라도 유효한 문제가 발생 -> 로그아웃 시 바로 지우는 API가 있어서 재사용 감지 로직이 세션 무력화
+                 */
 
                 Authentication authentication = jwtProvider.getAuthentication(claims);
                 if (authentication != null) {
@@ -217,6 +212,33 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
             throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
         }
 
+        // ------------------RT 재사용 감지-------------------------
+
+        /*
+         *
+         * 이전 로직은 "저장값과 다르면 거절"이 전부였다. 그러나 회전형 RT 에서 *이미 사용된* RT 가
+         * 다시 오는 것은 단순 실패가 아니라 탈취 신호다 — 정상 클라이언트라면 회전 후 새 RT 만
+         * 갖고 있기 때문이다. OAuth 2.0 Security BCP 4.14.2 가 권장함.
+         *
+         * 유예 창(prev_rt)이 필요한 이유: 네트워크 재시도나 동시 요청 두 건이 같은 RT 로 들어오면
+         * 정상 사용자도 "재사용"으로 잡혀 강제 로그아웃된다. 직전 RT 를 짧게 남겨 그 구간만 통과시킨다.
+         */
+        if (requestRT != null && !requestRT.equals(savedRT)) {
+            String prevRT = redisTemplate.opsForValue().get(PREV_RT_PREFIX + username);
+
+            if (requestRT.equals(prevRT)) {
+                // 1. 회전 직후의 재시도. 세션을 죽이지 않고 현재 RT 를 쓰라고 알린다.
+                log.info("[JWTAuthenticationFilter] - RT rotation grace hit for {}", username);
+                throw new GeneralException(ErrorCode.AUTH_TOKEN_EXPIRED);
+            }
+
+            // 2. 유예 창 밖의 불일치 = 탈취로 판정하고 해당 사용자의 세션을 전부 끊는다.
+            log.warn("[JWTAuthenticationFilter] - RT REUSE DETECTED. Invalidating session for {}", username);
+            redisTemplate.delete("refresh:" + username);
+            redisTemplate.delete(PREV_RT_PREFIX + username);
+            throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
+        }
+
         if (requestRT != null && requestRT.equals(savedRT)){
             UserDetails userDetails = customUserDetailsService.loadUserByUsername(username);
             Authentication authentication = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
@@ -237,6 +259,11 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                     .sameSite("Strict")
                     .build();
             response.setHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+            // 직전 RT 를 짧게 보관한다. 이 창 안에 들어온 같은 RT 는 재시도로 보고,
+            // 3. 창 밖에서 오면 탈취로 판정한다. 창이 길수록 탈취 감지가 무뎌지므로 짧게 잡는다.
+            redisTemplate.opsForValue().set(
+                    PREV_RT_PREFIX + username, savedRT, PREV_RT_GRACE_SECONDS, TimeUnit.SECONDS);
+
             // 회전된 RT 도 동일하게 TTL 을 건다 (H-2). 여기가 빠지면 재발급마다 영구 키가 하나씩 쌓인다.
             redisTemplate.opsForValue().set(
                     "refresh:" + username,

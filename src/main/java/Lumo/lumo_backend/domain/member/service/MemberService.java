@@ -257,13 +257,16 @@ public class MemberService {
         Member member = memberRepository.findById(memberId).orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
         redisTemplate.delete("refresh:"+member.getEmail());
 
-        Long remainingTime = jwtProvider.getRemainingTime(accessToken); // TTL 용 남은 시간 계산
-
-        if (remainingTime > 0) {
-            String key = "blacklist:" + accessToken;
-            redisTemplate.opsForValue().set(key, "logout", remainingTime, TimeUnit.MILLISECONDS);
-            log.info("[MemberService] - add AccessToken in BlackList! remainingTime: {}ms", remainingTime);
-        }
+        /*
+         * 블랙리스트 등록을 제거했다.
+         *
+         * 읽는 쪽인 JWTAuthenticationFilter이 사라졌으므로 여기서 쓰기만 계속하면 아무도 보지 않는 키가 Redis 에 쌓일 뿐이다.
+         * - AT 를 15분으로 줄인 것이 이 기능을 대체한다.
+         *
+         * 로그아웃의 실질적 효력은 아래 refresh 키 삭제
+         */
+        // (G-9) 회전 유예 창에 남은 직전 RT 도 함께 정리.
+        redisTemplate.delete("prev_rt:" + member.getEmail());
 
         log.info("[MemberService - logout] Success to logout -> {}", member.getEmail());
     }
