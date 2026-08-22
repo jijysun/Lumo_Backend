@@ -2,7 +2,6 @@ package Lumo.lumo_backend.domain.member.service;
 
 import Lumo.lumo_backend.domain.alarm.entity.MissionHistory;
 import Lumo.lumo_backend.domain.alarm.entity.repository.MissionHistoryRepository;
-import Lumo.lumo_backend.domain.email.service.EmailService;
 import Lumo.lumo_backend.domain.member.dto.MemberReqDTO;
 import Lumo.lumo_backend.domain.member.dto.MemberRespDTO;
 import Lumo.lumo_backend.domain.member.dto.MissionStat;
@@ -48,7 +47,6 @@ public class MemberService {
 
     private final MemberRepository memberRepository;
     private final MissionHistoryRepository missionHistoryRepository;
-    private final EmailService emailService;
     // (M-9) raw type 이면 반환값이 Object 라 매번 캐스팅해야 하고 타입 오류가 런타임에야 드러난다.
     private final RedisTemplate<String, String> redisTemplate;
     private final JWTProvider jwtProvider;
@@ -139,8 +137,6 @@ public class MemberService {
                             .ofMap(Map.of(MailStream.FIELD_EMAIL, email,
                                           MailStream.FIELD_CODE, code)),
                     XAddOptions.maxlen(MailStream.MAX_LEN).approximateTrimming(true));
-//            log.info("[MemberService - requestVerificationCode] call EmailService with {} - {}", email, code);
-//            emailService.startWork();
         }
     }
     public String generateVerificationCode() {
