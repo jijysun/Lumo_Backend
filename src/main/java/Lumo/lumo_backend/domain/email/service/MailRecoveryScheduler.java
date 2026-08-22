@@ -78,7 +78,12 @@ public class MailRecoveryScheduler {
                     continue;
                 }
 
-                long deliveryCount = message.getTotalDeliveryCount();
+                /*
+                 * XPENDING 이 돌려주는 값 = claim 이전까지의 전달 횟수
+                 * 방금 claim 이 한 번 더 늘렸으므로, 지금 시도하는 회차는 +1 (이 보정이 없으면 워커 1회차와 회수 1회차가 로그에 똑같이 "delivery 1" 로 찍힌다)
+                 */
+                long deliveredSoFar = message.getTotalDeliveryCount();
+                long deliveryCount = deliveredSoFar + 1;
 
                 /*
                  * 전달 횟수가 곧 재시도 횟수다 — Streams 가 세어 주므로 별도 카운터가 필요 없다.
@@ -87,11 +92,11 @@ public class MailRecoveryScheduler {
                  * (A-6) 여기서 그냥 XACK 하면 실패 사실이 로그 한 줄로만 남고 본문은 사라진다.
                  * DLQ 로 옮겨야 "몇 건이, 어떤 주소로, 왜" 실패했는지 사후에 확인·재발송할 수 있다.
                  */
-                if (deliveryCount >= MailStream.MAX_DELIVERY_COUNT) {
+                if (deliveredSoFar >= MailStream.MAX_DELIVERY_COUNT) {
                     for (MapRecord<String, Object, Object> record : claimed) {
                         deadLetterPublisher.publish(record,
                                 "max-delivery-exceeded (consumer=" + message.getConsumerName() + ")",
-                                deliveryCount);
+                                deliveredSoFar);
                         redisTemplate.opsForStream()
                                 .acknowledge(MailStream.KEY, MailStream.GROUP, record.getId());
                     }
