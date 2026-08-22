@@ -12,11 +12,14 @@ import Lumo.lumo_backend.domain.member.entity.memberEnum.MemberRole;
 import Lumo.lumo_backend.domain.member.exception.MemberException;
 import Lumo.lumo_backend.domain.member.repository.MemberRepository;
 import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
+import Lumo.lumo_backend.global.redis.MailStream;
 import Lumo.lumo_backend.global.security.jwt.JWT;
 import Lumo.lumo_backend.global.security.jwt.JWTProvider;
 import Lumo.lumo_backend.global.security.token.RefreshTokenKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.RedisStreamCommands.XAddOptions;
+import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -33,6 +36,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
@@ -122,7 +126,19 @@ public class MemberService {
             throw new MemberException(MemberErrorCode.ALREADY_SEND); // 따닥 방지
         }
         else{
-            redisTemplate.opsForList().leftPush(EmailService.QUEUE_KEY, email + ":" + code);
+            /*
+             * (A-5) List LPUSH → Stream XADD.
+             *
+             * 이전 "email:code" 문자열은 이메일에 ':' 가 섞이면 split 이 깨졌다. 필드 맵이라 그 문제가 사라진다.
+             * MAXLEN 은 필수다 — XACK 은 PEL 에서만 빼고 엔트리는 스트림에 남으므로,
+             * 트리밍하지 않으면 메모리가 단조 증가한다. '~' 근사 트리밍이 정확 트리밍보다 훨씬 싸다.
+             */
+            redisTemplate.opsForStream().add(
+                    StreamRecords.newRecord()
+                            .in(MailStream.KEY)
+                            .ofMap(Map.of(MailStream.FIELD_EMAIL, email,
+                                          MailStream.FIELD_CODE, code)),
+                    XAddOptions.maxlen(MailStream.MAX_LEN).approximateTrimming(true));
 //            log.info("[MemberService - requestVerificationCode] call EmailService with {} - {}", email, code);
 //            emailService.startWork();
         }

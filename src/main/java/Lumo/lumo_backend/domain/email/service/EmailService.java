@@ -1,15 +1,23 @@
 package Lumo.lumo_backend.domain.email.service;
 
 import Lumo.lumo_backend.domain.member.exception.MemberException;
+import Lumo.lumo_backend.global.redis.MailStream;
+import Lumo.lumo_backend.global.redis.MailStreamInitializer;
 import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.stream.Consumer;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.StreamOffset;
+import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -17,6 +25,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.io.UnsupportedEncodingException;
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -24,12 +34,25 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class EmailService {
 
-    /** 발송 대기 큐 키. MailQueueMetrics 가 같은 키를 봐야 하므로 상수로 노출한다. */
-    public static final String QUEUE_KEY = "email_queue";
+    /**
+     * 워커 루프 종료 플래그 (A-5 / G-5).
+     *
+     * <p>이전 {@code while(true)} 는 종료 신호를 받을 방법이 없었다. {@code setAwaitTerminationSeconds}
+     * 가 걸려 있어도 무한 루프는 인터럽트로만 끝나므로, 블루-그린 전환 때 <b>처리 중이던 메일이 유실</b>됐다.
+     * {@code volatile} 이라야 다른 스레드(@PreDestroy)의 변경이 워커 스레드에 즉시 보인다.
+     */
+    private volatile boolean running = true;
+
+    /**
+     * 블로킹 대기 시간. {@code AsyncConfig} 의 awaitTermination 보다 <b>충분히 짧아야</b>
+     * 종료 요청 후 그 시간 안에 루프가 빠져나온다.
+     */
+    private static final Duration BLOCK_TIMEOUT = Duration.ofSeconds(2);
 
     private final JavaMailSender mailSender;
     private final RedisTemplate<String, String> redisTemplate;
     private final MeterRegistry meterRegistry;
+    private final MailStreamInitializer streamInitializer;
 
     /** SMTP 왕복 시간. G-4 의 필요 워커 수를 Little's Law 로 역산하는 입력값이 된다. */
     private Timer sendTimer;
@@ -59,28 +82,102 @@ public class EmailService {
                 .register(meterRegistry);
     }
 
-    @Async("mailExecutor")
-    public void startMailWorker(int workerId) {
-        log.info("[EmailService] - EmailWorker 메일 발송 워커 가동 시작");
-        while (true) {
-            try {
-                // BRPOP!
-                String task = redisTemplate.opsForList().rightPop(QUEUE_KEY, 5, TimeUnit.SECONDS);
+    /**
+     * 종료 신호. 루프는 다음 반복에서 조건을 보고 스스로 빠져나온다 (A-5 / G-5).
+     * 최대 {@link #BLOCK_TIMEOUT} 만큼 늦게 반응한다.
+     */
+    @PreDestroy
+    void shutdown() {
+        log.info("[EmailService] shutdown requested - stopping mail workers");
+        running = false;
+    }
 
-                if (task != null) {
-                    String[] data = task.split(":");
-                    sendEmail(data[0], data[1]);
+    /**
+     * 메일 발송 워커 (A-5 / G-1).
+     *
+     * <p><b>핵심은 XACK 의 위치다.</b> {@code XREADGROUP} 으로 읽어도 항목은 PEL 에 남고,
+     * 발송이 성공한 뒤에야 {@code XACK} 으로 제거한다. 그 사이에 죽으면 항목이 PEL 에 남아
+     * {@code MailRecoveryScheduler} 가 회수한다 — 이것이 at-least-once 다.
+     *
+     * <p>⚠️ 대가로 <b>중복 발송이 가능</b>하다. 발송 직후 XACK 직전에 죽으면 재전달된다.
+     * 인증 코드는 중복 수신이 치명적이지 않아 수용하는 트레이드오프다.
+     */
+    @Async("mailWorkerExecutor")
+    public void startMailWorker(int workerId) {
+        Consumer consumer = Consumer.from(MailStream.GROUP, MailStream.consumerName(workerId));
+        log.info("[EmailService] worker {} started as consumer '{}'", workerId, consumer.getName());
+
+        while (running) {
+            try {
+                /*
+                 * RedisConfig 의 hashValueSerializer 가 GenericJackson2JsonRedisSerializer 라
+                 * opsForStream() 의 타입 인자가 <String, Object, Object> 로 잡힌다.
+                 * 값은 String 으로 왕복하지만 선언 타입은 Object 이므로 꺼낼 때 변환한다.
+                 */
+                List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
+                        consumer,
+                        StreamReadOptions.empty().block(BLOCK_TIMEOUT).count(1),
+                        // ">" = 이 그룹이 아직 아무에게도 전달하지 않은 항목만
+                        StreamOffset.create(MailStream.KEY, ReadOffset.lastConsumed()));
+
+                if (records == null || records.isEmpty()) {
+                    continue;
                 }
-                /*if (task == null && workerId == 0) {
-                    log.info("[EmailService] (worker {}) - no email to send!",  workerId);
-                }*/
+
+                for (MapRecord<String, Object, Object> record : records) {
+                    process(record);
+                }
+
             } catch (Exception e) {
-                log.error("[EmailService] - EmailWorker {} Error, retry after 1s... ", workerId, e);
-                try {
-                    Thread.sleep(1000);
+                if (!running) {
+                    break; // 종료 중 발생한 연결 예외는 정상 흐름
                 }
-                catch (InterruptedException ignored) { }
+                // 스트림·그룹이 사라진 경우(FLUSHDB 등)는 재생성으로 복구된다.
+                // 복구하지 않으면 워커 전원이 NOGROUP 으로 무한 재시도하며 아무 일도 하지 않는다.
+                if (streamInitializer.recreateIfMissing(e)) {
+                    continue;
+                }
+
+                log.error("[EmailService] worker {} error, retry after 1s", workerId, e);
+                sleepQuietly();
             }
+        }
+        log.info("[EmailService] worker {} stopped", workerId);
+    }
+
+    /**
+     * 한 건을 처리한다. <b>발송이 성공해야만 XACK 한다</b> —
+     * 예외가 나면 여기서 빠져나가 XACK 에 도달하지 못하고 PEL 에 남는다.
+     *
+     * <p>{@code MailRecoveryScheduler} 가 회수한 항목도 같은 경로를 타야 하므로 공개한다.
+     * 회수 항목을 별도 로직으로 처리하면 두 경로의 동작이 조용히 갈라진다.
+     */
+    public void process(MapRecord<String, Object, Object> record) {
+        String email = field(record, MailStream.FIELD_EMAIL);
+        String code = field(record, MailStream.FIELD_CODE);
+
+        if (email == null || code == null) {
+            // 필드가 깨진 항목은 재시도해도 영원히 실패한다. 회수 루프에 남기지 않고 즉시 확인 처리한다.
+            log.error("[EmailService] malformed record {} - acking to avoid infinite retry", record.getId());
+            redisTemplate.opsForStream().acknowledge(MailStream.KEY, MailStream.GROUP, record.getId());
+            return;
+        }
+
+        sendEmail(email, code);
+
+        redisTemplate.opsForStream().acknowledge(MailStream.KEY, MailStream.GROUP, record.getId());
+    }
+
+    private static String field(MapRecord<String, Object, Object> record, String name) {
+        Object value = record.getValue().get(name);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private void sleepQuietly() {
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         }
     }
 
