@@ -4,6 +4,7 @@ import Lumo.lumo_backend.global.apiResponse.status.ErrorCode;
 import Lumo.lumo_backend.global.exception.GeneralException;
 import Lumo.lumo_backend.global.security.jwt.JWT;
 import Lumo.lumo_backend.global.security.handler.SecurityErrorResponder;
+import Lumo.lumo_backend.global.security.token.RefreshTokenKey;
 import Lumo.lumo_backend.global.security.jwt.JWTProvider;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetailsService;
@@ -46,7 +47,6 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
     private final MeterRegistry meterRegistry;
 
     /** (G-9) 회전 직후 유예 창. 네트워크 재시도·동시 요청을 탈취로 오판하지 않기 위한 최소 구간. */
-    private static final String PREV_RT_PREFIX = "prev_rt:";
     private static final long PREV_RT_GRACE_SECONDS = 20;
 
     /**
@@ -193,7 +193,19 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
         // String authorities = claims.get("auth").toString(); 어차피 userDetails에서 검색하니까 필요 X
 
         String requestRT = resolveRefreshToken(request);
-        String savedRT = redisTemplate.opsForValue().get("refresh:"+username); // 이메일
+
+        /*
+         * (H-9) RT 키를 기기 단위로 분리한다.
+         *
+         * 이전에는 refresh:{email} 하나뿐이라 기기 B 로그인이 기기 A 의 RT 를 덮어썼고,
+         * 그 뒤 기기 A 의 갱신 시도가 아래 재사용 감지에 "탈취" 로 잡혀 두 기기가 함께 죽었다.
+         * 키가 기기별로 나뉘면 "저장값과 다르다 = 이미 쓴 RT" 라는 전제가 비로소 참이 된다.
+         */
+        String deviceId = RefreshTokenKey.resolveDeviceId(request);
+        String refreshKey = RefreshTokenKey.refresh(username, deviceId);
+        String prevRtKey = RefreshTokenKey.prevRt(username, deviceId);
+
+        String savedRT = redisTemplate.opsForValue().get(refreshKey);
 
         if (savedRT == null){
             log.warn("[JWTAuthenticationFilter] - savedRT is null!");
@@ -224,7 +236,7 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
          * 정상 사용자도 "재사용"으로 잡혀 강제 로그아웃된다. 직전 RT 를 짧게 남겨 그 구간만 통과시킨다.
          */
         if (requestRT != null && !requestRT.equals(savedRT)) {
-            String prevRT = redisTemplate.opsForValue().get(PREV_RT_PREFIX + username);
+            String prevRT = redisTemplate.opsForValue().get(prevRtKey);
 
             if (requestRT.equals(prevRT)) {
                 // 1. 회전 직후의 재시도. 세션을 죽이지 않고 현재 RT 를 쓰라고 알린다.
@@ -232,10 +244,17 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
                 throw new GeneralException(ErrorCode.AUTH_TOKEN_EXPIRED);
             }
 
-            // 2. 유예 창 밖의 불일치 = 탈취로 판정하고 해당 사용자의 세션을 전부 끊는다.
-            log.warn("[JWTAuthenticationFilter] - RT REUSE DETECTED. Invalidating session for {}", username);
-            redisTemplate.delete("refresh:" + username);
-            redisTemplate.delete(PREV_RT_PREFIX + username);
+            /*
+             * 2. 유예 창 밖의 불일치 = 탈취로 판정한다.
+             *
+             * (H-9) 무효화 범위를 "해당 기기" 로 한정한다. 전 기기를 끊는 편이 OAuth BCP 권장에
+             * 가깝지만, RT 는 기기별로 발급되므로 한 기기의 RT 가 새도 다른 기기 RT 는 공격자에게 없다.
+             * 전 세션 무효화는 과잉이고, H-9 자체가 바로 그 과잉이 만든 회귀였다.
+             */
+            log.warn("[JWTAuthenticationFilter] - RT REUSE DETECTED. Invalidating session for {} (device={})",
+                    username, deviceId);
+            redisTemplate.delete(refreshKey);
+            redisTemplate.delete(prevRtKey);
             throw new GeneralException(ErrorCode.AUTH_TOKEN_INVALID);
         }
 
@@ -262,11 +281,11 @@ public class JWTAuthenticationFilter extends OncePerRequestFilter {
             // 직전 RT 를 짧게 보관한다. 이 창 안에 들어온 같은 RT 는 재시도로 보고,
             // 3. 창 밖에서 오면 탈취로 판정한다. 창이 길수록 탈취 감지가 무뎌지므로 짧게 잡는다.
             redisTemplate.opsForValue().set(
-                    PREV_RT_PREFIX + username, savedRT, PREV_RT_GRACE_SECONDS, TimeUnit.SECONDS);
+                    prevRtKey, savedRT, PREV_RT_GRACE_SECONDS, TimeUnit.SECONDS);
 
             // 회전된 RT 도 동일하게 TTL 을 건다 (H-2). 여기가 빠지면 재발급마다 영구 키가 하나씩 쌓인다.
             redisTemplate.opsForValue().set(
-                    "refresh:" + username,
+                    refreshKey,
                     newJWT.getRefreshToken(),
                     jwtProvider.getRemainingTime(newJWT.getRefreshToken()),
                     TimeUnit.MILLISECONDS);

@@ -8,6 +8,7 @@ import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
 import Lumo.lumo_backend.domain.member.status.MemberSuccessCode;
 import Lumo.lumo_backend.global.apiResponse.APIResponse;
 import Lumo.lumo_backend.global.ratelimit.IpRateLimiter;
+import Lumo.lumo_backend.global.security.token.RefreshTokenKey;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
 // import io.swagger.v3.oas.annotations.Operation;
 // import io.swagger.v3.oas.annotations.tags.Tag;
@@ -51,9 +52,13 @@ public class MemberController {
 
     @PostMapping("/login")
     // @Operation(summary = "로그인 API", description = "닉네임과 비밀번호로 로그인을 진행합니다. 성공 여부와 JWT accessToken을 반환합니다. 쿠키로는 RefreshToken를 설정하도록 하였습니다. ")
-    public APIResponse<MemberRespDTO.LoginRespDTO> reqLogin(@RequestBody MemberReqDTO.LoginReqDTO dto, HttpServletResponse response) {
+    public APIResponse<MemberRespDTO.LoginRespDTO> reqLogin(@RequestBody MemberReqDTO.LoginReqDTO dto,
+                                                            HttpServletRequest request,
+                                                            HttpServletResponse response) {
 
-        MemberRespDTO.MemberInfoDTO memberInfo = memberService.login(dto);
+        // (H-9) 기기 식별자. 헤더가 없으면 "default" 로 떨어지므로 클라이언트 수정 전에도 동작한다.
+        MemberRespDTO.MemberInfoDTO memberInfo =
+                memberService.login(dto, RefreshTokenKey.resolveDeviceId(request));
 
         ResponseCookie cookie = ResponseCookie.from("refreshToken", memberInfo.getJwt().getRefreshToken())
                 .httpOnly(true)
@@ -79,7 +84,8 @@ public class MemberController {
             throw new MemberException(MemberErrorCode.CANT_FOUND_MEMBER);
         }
 
-        memberService.logout(bearerToken.substring(7).trim(), userDetails.getMemberId());
+        memberService.logout(bearerToken.substring(7).trim(), userDetails.getMemberId(),
+                RefreshTokenKey.resolveDeviceId(request));
 
         return APIResponse.onSuccess(
                 MemberRespDTO.SimpleAPIRespDTO.builder().isSuccess(true).build(),

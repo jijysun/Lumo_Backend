@@ -14,6 +14,7 @@ import Lumo.lumo_backend.domain.member.repository.MemberRepository;
 import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
 import Lumo.lumo_backend.global.security.jwt.JWT;
 import Lumo.lumo_backend.global.security.jwt.JWTProvider;
+import Lumo.lumo_backend.global.security.token.RefreshTokenKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -229,7 +230,11 @@ public class MemberService {
 //        log.info("[MemberService - signIn] Success to signIn -> {}, {}", dto.getEmail(), dto.getUsername());
     }
 
-    public MemberRespDTO.MemberInfoDTO login(MemberReqDTO.LoginReqDTO dto) {
+    /**
+     * @param deviceId 기기 식별자 (H-9). 컨트롤러가 {@code X-Device-Id} 헤더에서 꺼내 넘긴다.
+     *                 헤더가 없으면 {@code "default"} 로 떨어져 기존과 동일하게 동작한다.
+     */
+    public MemberRespDTO.MemberInfoDTO login(MemberReqDTO.LoginReqDTO dto, String deviceId) {
         Member member = memberRepository.findByEmail(dto.getEmail()).orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
         if (!encoder.matches(dto.getPassword(), member.getPassword())) {
             throw new MemberException(MemberErrorCode.CANT_FOUND_MEMBER);
@@ -242,8 +247,9 @@ public class MemberService {
         // TTL 은 RT 자체의 exp 에서 역산한다 (H-2).
         // TTL 없이 set 하면 로그아웃하지 않은 사용자의 키가 영구히 남아 회원 수에 비례해 단조 증가한다.
         // 상수를 복제하지 않고 토큰의 만료 시각을 쓰므로, C-3 로 RT 수명을 늘려도 TTL 이 자동으로 따라간다.
+        // (H-9) 기기별 키. 다른 기기의 RT 를 덮어쓰지 않는다.
         redisTemplate.opsForValue().set(
-                "refresh:" + dto.getEmail(),
+                RefreshTokenKey.refresh(dto.getEmail(), deviceId),
                 jwt.getRefreshToken(),
                 jwtProvider.getRemainingTime(jwt.getRefreshToken()),
                 TimeUnit.MILLISECONDS);
@@ -253,9 +259,13 @@ public class MemberService {
         return MemberRespDTO.MemberInfoDTO.builder().jwt(jwt).username(member.getUsername()).build();
     }
 
-    public void logout (String accessToken, Long memberId){
+    /**
+     * @param deviceId 기기 식별자 (H-9). <b>로그아웃은 그 기기만 끊는다</b> —
+     *                 계정 전체를 끊으면 다른 기기에서 쓰던 세션까지 함께 죽는다.
+     */
+    public void logout (String accessToken, Long memberId, String deviceId){
         Member member = memberRepository.findById(memberId).orElseThrow(() -> new MemberException(MemberErrorCode.CANT_FOUND_MEMBER));
-        redisTemplate.delete("refresh:"+member.getEmail());
+        redisTemplate.delete(RefreshTokenKey.refresh(member.getEmail(), deviceId));
 
         /*
          * 블랙리스트 등록을 제거했다.
@@ -266,7 +276,7 @@ public class MemberService {
          * 로그아웃의 실질적 효력은 아래 refresh 키 삭제
          */
         // (G-9) 회전 유예 창에 남은 직전 RT 도 함께 정리.
-        redisTemplate.delete("prev_rt:" + member.getEmail());
+        redisTemplate.delete(RefreshTokenKey.prevRt(member.getEmail(), deviceId));
 
         log.info("[MemberService - logout] Success to logout -> {}", member.getEmail());
     }
