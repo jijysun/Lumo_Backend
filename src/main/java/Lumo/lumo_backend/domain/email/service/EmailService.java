@@ -84,6 +84,7 @@ public class EmailService {
         }
     }
 
+    // 측정용 메서드
     public void sendEmail(String email, String code) {
         Timer.Sample sample = Timer.start(meterRegistry);
         boolean success = false;
@@ -97,6 +98,7 @@ public class EmailService {
         }
     }
 
+    // 실 메서드. 현 Service 내에서만 접근하게끔.
     private void doSendEmail(String email, String code) {
         MimeMessage msg = mailSender.createMimeMessage();
         MimeMessageHelper helper;
