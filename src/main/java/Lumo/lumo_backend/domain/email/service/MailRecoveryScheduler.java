@@ -1,5 +1,6 @@
 package Lumo.lumo_backend.domain.email.service;
 
+import Lumo.lumo_backend.domain.email.support.MailDeadLetterPublisher;
 import Lumo.lumo_backend.global.redis.MailStream;
 import Lumo.lumo_backend.global.redis.MailStreamInitializer;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class MailRecoveryScheduler {
     private final RedisTemplate<String, String> redisTemplate;
     private final EmailService emailService;
     private final MailStreamInitializer streamInitializer;
+    private final MailDeadLetterPublisher deadLetterPublisher;
 
     /**
      * ⚠️ 블루-그린 전환 중에는 두 컨테이너가 동시에 이 스케줄러를 돌린다.
@@ -60,22 +62,12 @@ public class MailRecoveryScheduler {
                 }
 
                 /*
-                 * 전달 횟수가 곧 재시도 횟수다 — Streams 가 세어 주므로 별도 카운터가 필요 없다.
-                 * 상한을 넘으면 계속 회수해봐야 같은 이유로 실패한다(poison message).
-                 * A-6 에서 이 자리가 DLQ 이관으로 바뀐다. 지금은 확인 처리해 루프에서 빼낸다.
-                 */
-                if (message.getTotalDeliveryCount() >= MailStream.MAX_DELIVERY_COUNT) {
-                    log.error("[MailRecovery] giving up on {} after {} deliveries (consumer={})",
-                            message.getIdAsString(), message.getTotalDeliveryCount(), message.getConsumerName());
-                    redisTemplate.opsForStream()
-                            .acknowledge(MailStream.KEY, MailStream.GROUP, message.getId());
-                    continue;
-                }
-
-                /*
                  * ⚠️ XCLAIM 은 소유권만 옮긴다. 워커는 ">"(신규 항목)만 읽으므로 회수해 두기만 하면
                  * 아무도 처리하지 않고 새 소유자의 PEL 에 그대로 눌러앉는다.
                  * 그래서 claim 이 돌려준 레코드를 여기서 곧바로 처리한다.
+                 *
+                 * (A-6) 포기 판정보다 claim 을 먼저 하는 이유 — PendingMessage 에는 ID 만 있고
+                 * 본문이 없다. DLQ 에 "무엇이 실패했는지" 를 남기려면 레코드를 손에 쥐어야 한다.
                  */
                 List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream()
                         .claim(MailStream.KEY, MailStream.GROUP, MailStream.RECOVERY_CONSUMER,
@@ -86,12 +78,33 @@ public class MailRecoveryScheduler {
                     continue;
                 }
 
+                long deliveryCount = message.getTotalDeliveryCount();
+
+                /*
+                 * 전달 횟수가 곧 재시도 횟수다 — Streams 가 세어 주므로 별도 카운터가 필요 없다.
+                 * 상한을 넘으면 계속 회수해봐야 같은 이유로 실패한다(poison message).
+                 *
+                 * (A-6) 여기서 그냥 XACK 하면 실패 사실이 로그 한 줄로만 남고 본문은 사라진다.
+                 * DLQ 로 옮겨야 "몇 건이, 어떤 주소로, 왜" 실패했는지 사후에 확인·재발송할 수 있다.
+                 */
+                if (deliveryCount >= MailStream.MAX_DELIVERY_COUNT) {
+                    for (MapRecord<String, Object, Object> record : claimed) {
+                        deadLetterPublisher.publish(record,
+                                "max-delivery-exceeded (consumer=" + message.getConsumerName() + ")",
+                                deliveryCount);
+                        redisTemplate.opsForStream()
+                                .acknowledge(MailStream.KEY, MailStream.GROUP, record.getId());
+                    }
+                    continue;
+                }
+
                 log.warn("[MailRecovery] reclaimed {} from {} (delivery #{})",
-                        message.getIdAsString(), message.getConsumerName(), message.getTotalDeliveryCount());
+                        message.getIdAsString(), message.getConsumerName(), deliveryCount);
 
                 for (MapRecord<String, Object, Object> record : claimed) {
                     try {
-                        emailService.process(record);
+                        // 실제 전달 횟수를 넘겨야 DLQ 기록의 deliveries 값이 사실과 맞는다.
+                        emailService.process(record, deliveryCount);
                     } catch (Exception e) {
                         // 재발송이 또 실패했다. PEL 에 남으므로 다음 주기에 delivery count 가 올라간다.
                         log.error("[MailRecovery] resend failed for {}", record.getId(), e);
