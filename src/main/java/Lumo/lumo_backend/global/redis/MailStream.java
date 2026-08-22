@@ -41,6 +41,19 @@ public final class MailStream {
     /** 회수 스케줄러가 소유권을 가져올 때 쓰는 컨슈머 이름. */
     public static final String RECOVERY_CONSUMER = "recovery";
 
+    /*
+     * DLQ(Dead Letter Queue) — 더 이상 재시도하지 않기로 한 항목의 보관소 (A-6 / G-2).
+     *
+     * 버리지 않고 남기는 이유: "몇 건이 왜 실패했는가" 를 사후에 확인할 수 있어야 한다.
+     * 그냥 XACK 하면 실패 사실이 카운터 숫자로만 남고 어떤 주소가 왜 죽었는지 알 수 없다.
+     */
+    public static final String DLQ_KEY = "mail:stream:dlq";
+    public static final long DLQ_MAX_LEN = 1_000L;
+
+    public static final String FIELD_REASON = "reason";
+    public static final String FIELD_FAILED_AT = "failedAt";
+    public static final String FIELD_DELIVERY_COUNT = "deliveryCount";
+
     private MailStream() {
     }
 

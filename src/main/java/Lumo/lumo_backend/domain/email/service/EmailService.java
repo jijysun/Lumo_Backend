@@ -1,9 +1,11 @@
 package Lumo.lumo_backend.domain.email.service;
 
-import Lumo.lumo_backend.domain.member.exception.MemberException;
+import Lumo.lumo_backend.domain.email.support.MailDeadLetterPublisher;
+import Lumo.lumo_backend.domain.email.support.MailFailure;
+import Lumo.lumo_backend.domain.email.support.MailFailureClassifier;
+import Lumo.lumo_backend.domain.email.support.MailSendFailedException;
 import Lumo.lumo_backend.global.redis.MailStream;
 import Lumo.lumo_backend.global.redis.MailStreamInitializer;
-import Lumo.lumo_backend.domain.member.status.MemberErrorCode;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -53,6 +55,7 @@ public class EmailService {
     private final RedisTemplate<String, String> redisTemplate;
     private final MeterRegistry meterRegistry;
     private final MailStreamInitializer streamInitializer;
+    private final MailDeadLetterPublisher deadLetterPublisher;
 
     /** SMTP 왕복 시간. G-4 의 필요 워커 수를 Little's Law 로 역산하는 입력값이 된다. */
     private Timer sendTimer;
@@ -63,7 +66,8 @@ public class EmailService {
      * 이 카운터가 그 주장을 방어할 수 있게 해준다.
      */
     private Counter sendSuccess;
-    private Counter sendFailure;
+    private Counter failTransient;
+    private Counter failPermanent;
 
     @PostConstruct
     void initMetrics() {
@@ -76,9 +80,18 @@ public class EmailService {
                 .tag("result", "success")
                 .register(meterRegistry);
 
-        sendFailure = Counter.builder("mail.send.result")
+        // (A-6) 실패를 성격별로 나눈다. 합계만 보면 "SMTP 가 죽었다" 와
+        // "존재하지 않는 주소로 보냈다" 가 같은 숫자로 보여 대응이 갈리지 않는다.
+        failTransient = Counter.builder("mail.send.result")
                 .description("메일 발송 결과 건수")
                 .tag("result", "fail")
+                .tag("failure", "transient")
+                .register(meterRegistry);
+
+        failPermanent = Counter.builder("mail.send.result")
+                .description("메일 발송 결과 건수")
+                .tag("result", "fail")
+                .tag("failure", "permanent")
                 .register(meterRegistry);
     }
 
@@ -153,19 +166,61 @@ public class EmailService {
      * 회수 항목을 별도 로직으로 처리하면 두 경로의 동작이 조용히 갈라진다.
      */
     public void process(MapRecord<String, Object, Object> record) {
+        process(record, 1L);
+    }
+
+    /**
+     * @param deliveryCount 이 항목이 전달된 횟수. 워커가 새로 읽었으면 1,
+     *                      회수 스케줄러가 넘겨줬으면 Streams 가 세어 둔 실제 횟수다.
+     */
+    public void process(MapRecord<String, Object, Object> record, long deliveryCount) {
         String email = field(record, MailStream.FIELD_EMAIL);
         String code = field(record, MailStream.FIELD_CODE);
 
         if (email == null || code == null) {
-            // 필드가 깨진 항목은 재시도해도 영원히 실패한다. 회수 루프에 남기지 않고 즉시 확인 처리한다.
-            log.error("[EmailService] malformed record {} - acking to avoid infinite retry", record.getId());
-            redisTemplate.opsForStream().acknowledge(MailStream.KEY, MailStream.GROUP, record.getId());
+            // 필드가 깨진 항목은 재시도해도 영원히 실패한다. 회수 루프에 남기지 않고 DLQ 로 보낸다.
+            deadLetterPublisher.publish(record, "malformed-record", deliveryCount);
+            acknowledge(record);
             return;
         }
 
-        sendEmail(email, code);
+        try {
+            sendEmail(email, code);
 
+        } catch (RuntimeException e) {
+            /*
+             *  PERMANENT 
+             * — 몇 번을 보내도 같은 이유로 실패한다. PEL 에 남겨두면 회수 루프가 3회까지 헛돌고, 그동안 바운스가 쌓여 발신 도메인 평판이 깎인다. 즉시 포기.
+             * 
+             *  TRANSIENT 
+             * — XACK 하지 않고 그냥 빠져나간다. 항목은 PEL 에 남고 MailRecoveryScheduler 가 60초 뒤 회수한다 (= 재시도).
+             */
+            MailFailure failure = MailFailureClassifier.classify(e); // 예외 분기 호출
+
+            if (failure.isPermanent()) { // 완전히 실패. DLQ에 삽입 + 정리
+                deadLetterPublisher.publish(record, "permanent: " + rootMessage(e), deliveryCount);
+                acknowledge(record);
+                return;
+            }
+
+            log.warn("[EmailService] transient failure on {} (delivery {}), leaving in PEL for retry - {}",
+                    record.getId(), deliveryCount, rootMessage(e));
+            return; // XACK 하지 않는다 = 재시도 대상으로 남긴다
+        }
+
+        acknowledge(record);
+    }
+
+    private void acknowledge(MapRecord<String, Object, Object> record) {
         redisTemplate.opsForStream().acknowledge(MailStream.KEY, MailStream.GROUP, record.getId());
+    }
+
+    private static String rootMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        return root.getClass().getSimpleName() + ": " + root.getMessage();
     }
 
     private static String field(MapRecord<String, Object, Object> record, String name) {
@@ -184,14 +239,18 @@ public class EmailService {
     // 측정용 메서드
     public void sendEmail(String email, String code) {
         Timer.Sample sample = Timer.start(meterRegistry);
-        boolean success = false;
         try {
             doSendEmail(email, code);
-            success = true;
+            sendSuccess.increment();
+
+        } catch (RuntimeException e) {
+            // (A-6) 실패의 성격까지 남긴다. 호출부의 분기와 같은 기준으로 세야 지표와 동작이 어긋나지 않는다.
+            (MailFailureClassifier.classify(e).isPermanent() ? failPermanent : failTransient).increment();
+            throw e;
+
         } finally {
             // 실패도 SMTP 왕복 시간을 소비했으므로 함께 기록한다.
             sample.stop(sendTimer);
-            (success ? sendSuccess : sendFailure).increment();
         }
     }
 
@@ -311,11 +370,16 @@ public class EmailService {
                     "</html>", true);
             helper.setReplyTo("no-reply@mail.com");
             mailSender.send(msg);
-        } catch (MessagingException e) {
-            e.printStackTrace();
-            throw new MemberException(MemberErrorCode.CANT_SEND_EMAIL);
-        } catch (UnsupportedEncodingException e) {
-            throw new RuntimeException(e);
+        } catch (MessagingException | UnsupportedEncodingException e) {
+            /*
+             * (A-6) 이전에는 MemberException(CANT_SEND_EMAIL) 로 바꿔 던져 SMTP 응답 코드가 사라졌다.
+             * 워커 경로에는 HTTP 상태를 쓸 곳도 없다. 원인을 보존해 호출부가 분류할 수 있게 한다.
+             *
+             * ⚠️ mailSender.send() 가 던지는 MailSendException 은 런타임 예외라 여기에 걸리지 않고
+             *    그대로 통과한다 — 그것이 정상이며, 분류는 MailFailureClassifier 가 맡는다.
+             *    (기존 catch (MessagingException) 이 이를 못 잡아 발송 실패가 조용히 사라졌다)
+             */
+            throw new MailSendFailedException(e);
         }
 
 //        log.info("[EmailService - requestVerificationCode] saved code {} to {}", redisTemplate.opsForValue().get(email), email);
