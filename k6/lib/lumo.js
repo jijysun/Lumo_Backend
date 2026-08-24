@@ -101,6 +101,84 @@ export function mailpitClear() {
     return res.status === 200;
 }
 
+/** 부하 대상 엔드포인트. 서버 측 응답시간은 이 uri 로 걸러서 본다. */
+export const TARGET_URI = '/api/member/request-code';
+
+/**
+ * {@code http_server_requests_seconds_bucket} 을 긁어 le → 누적건수 맵으로 돌려준다.
+ *
+ * <p><b>왜 서버 측 값을 따로 보는가</b> — k6 의 http_req_duration 에는 네트워크 RTT 가 섞인다.
+ * 로컬에서 EC2 로 쏘면 RTT 가 서버 처리시간보다 커서 측정값의 대부분이 네트워크가 된다.
+ * 이 히스토그램은 Tomcat 이 요청을 받아 응답을 쓸 때까지만 재므로 부하 생성기 위치와 무관하다.
+ */
+export function scrapeBuckets(uri) {
+    const res = http.get(`${BASE}/actuator/prometheus`, { tags: { name: 'scrape' } });
+    if (res.status !== 200) return null;
+
+    const buckets = {};
+    const lines = res.body.split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.indexOf('http_server_requests_seconds_bucket{') !== 0) continue;
+        if (uri && line.indexOf('uri="' + uri + '"') < 0) continue;
+
+        const m = /le="([^"]+)"\} ([0-9.eE+-]+)\s*$/.exec(line);
+        if (!m) continue;
+
+        // 같은 le 라도 method/status 조합마다 라인이 나뉜다. 합산해야 전체 분포가 된다.
+        const le = m[1] === '+Inf' ? Infinity : parseFloat(m[1]);
+        const count = parseFloat(m[2]);
+        if (isNaN(count)) continue;
+        buckets[le] = (buckets[le] || 0) + count;
+    }
+    return buckets;
+}
+
+/**
+ * 두 버킷 스냅샷의 차이로 회차 분위수를 구한다 (Prometheus histogram_quantile 과 같은 선형 보간).
+ *
+ * <p>누적 히스토그램이므로 델타도 단조 증가를 유지한다 — 그래서 뺀 뒤에 그대로 계산할 수 있다.
+ *
+ * @returns 초 단위. 표본이 없으면 null
+ */
+export function quantileFromBuckets(base, now, q) {
+    if (!now) return null;
+
+    const les = Object.keys(now)
+        .map(function (k) { return k === 'Infinity' ? Infinity : parseFloat(k); })
+        .sort(function (a, b) { return a - b; });
+
+    if (les.length === 0) return null;
+
+    const cum = [];
+    for (let i = 0; i < les.length; i++) {
+        const key = les[i] === Infinity ? 'Infinity' : String(les[i]);
+        const b = base && base[key] !== undefined ? base[key] : 0;
+        cum.push((now[key] || 0) - b);
+    }
+
+    const total = cum[cum.length - 1];
+    if (!total || total <= 0) return null;
+
+    const target = total * q;
+    for (let i = 0; i < les.length; i++) {
+        if (cum[i] < target) continue;
+
+        // 상한 밖(+Inf)으로 넘어갔다면 보간할 수 없다. maximum-expected-value 를 올려야 한다는 신호다.
+        if (les[i] === Infinity) {
+            return i > 0 ? les[i - 1] : null;
+        }
+        const lowerLe = i === 0 ? 0 : les[i - 1];
+        const lowerCum = i === 0 ? 0 : cum[i - 1];
+        const span = cum[i] - lowerCum;
+        if (span <= 0) return les[i];
+
+        return lowerLe + (les[i] - lowerLe) * ((target - lowerCum) / span);
+    }
+    return les[les.length - 1];
+}
+
 /**
  * 앱의 누적 카운터를 한 번에 찍는다.
  *
@@ -114,6 +192,8 @@ export function snapshotCounters() {
         failTransient: scrapeSum('mail_send_result_total', 'failure="transient"') || 0,
         failPermanent: scrapeSum('mail_send_result_total', 'failure="permanent"') || 0,
         dlq: scrapeSum('mail_dlq_total') || 0,
+        // 서버 측 응답시간 분포. 회차값을 얻으려면 종료 시점에서 이 값을 빼야 한다.
+        buckets: scrapeBuckets(TARGET_URI),
     };
 }
 
@@ -187,6 +267,12 @@ export function reportProcessing(label, base) {
     const dlq = now.dlq - baseline.dlq;
     const received = mailpitTotal();
 
+    // 네트워크 RTT 가 빠진 순수 서버 처리시간. 개선 전후 비교는 이 값으로 한다.
+    const nowBuckets = scrapeBuckets(TARGET_URI);
+    const p95 = quantileFromBuckets(baseline.buckets, nowBuckets, 0.95);
+    const p99 = quantileFromBuckets(baseline.buckets, nowBuckets, 0.99);
+    const fmt = function (v) { return v === null ? 'n/a' : (v * 1000).toFixed(1) + 'ms'; };
+
     // 백로그가 남아 있던 경우에만 배출률이 의미를 갖는다.
     const drainRate = drain.drainSeconds > 0
         ? (drain.drained / drain.drainSeconds).toFixed(1) + ' 건/초'
@@ -204,6 +290,11 @@ export function reportProcessing(label, base) {
   잔여 배출량      ${drain.drained}
   워커 처리량 상한 ${drainRate}
 
+  [수락 계층 — 서버가 직접 잰 값, 네트워크 RTT 제외]
+  p95 / p99       ${fmt(p95)} / ${fmt(p99)}
+  ※ k6 요약의 http_req_duration 은 RTT 를 포함한 '사용자 체감' 이다.
+    개선 전후 비교는 위 서버 측 값으로 할 것 — 부하 생성기 위치에 영향받지 않는다.
+
   ※ 유실 판정: Mailpit 수신(${received}) >= 아래 요약의 mail_accepted 여야 한다
     (at-least-once 이므로 재시도로 인한 중복은 허용된다)
 ──────────────────────────────────────────────────`);
@@ -214,6 +305,8 @@ export function reportProcessing(label, base) {
         failPermanent: failPermanent,
         dlq: dlq,
         mailpitReceived: received,
+        serverP95: p95,
+        serverP99: p99,
         drainSeconds: drain.drainSeconds,
         drained: drain.drained,
         timedOut: drain.timedOut,

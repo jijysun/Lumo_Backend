@@ -53,6 +53,21 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    # 부하 테스트 판정을 서버 측 지표로 옮기기 위한 설정.
+    #
+    # k6 의 http_req_duration 에는 네트워크 RTT 가 포함된다. 로컬에서 EC2 로 쏘면
+    # 수락 계층 응답시간(로컬 실측 p95 3.7ms)보다 RTT 가 더 커서 측정값의 대부분이
+    # 네트워크가 된다. http_server_requests 는 Tomcat 이 요청을 받아 응답을 쓸 때까지만
+    # 재므로 부하 생성기 위치와 무관하다 — 개선 전후 비교는 이 값으로 한다.
+    distribution:
+      # 버킷을 Prometheus 로 보내 histogram_quantile() 로 집계한다.
+      # 클라이언트 측 percentiles 와 달리 Blue/Green 두 인스턴스의 값을 합쳐도 백분위가 깨지지 않는다.
+      percentiles-histogram:
+        http.server.requests: true
+      # 상한을 두지 않으면 수십 초짜리 버킷까지 생성된다.
+      # uri/method/status/outcome 태그와 곱해지므로 시계열 증가가 체감된다.
+      maximum-expected-value:
+        http.server.requests: 2s
   endpoints:
     web:
       exposure:
