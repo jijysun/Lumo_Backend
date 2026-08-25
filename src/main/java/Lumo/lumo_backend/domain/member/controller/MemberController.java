@@ -14,6 +14,7 @@ import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
 // import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -52,7 +53,15 @@ public class MemberController {
 
     @PostMapping("/login")
     // @Operation(summary = "로그인 API", description = "닉네임과 비밀번호로 로그인을 진행합니다. 성공 여부와 JWT accessToken을 반환합니다. 쿠키로는 RefreshToken를 설정하도록 하였습니다. ")
-    public APIResponse<MemberRespDTO.LoginRespDTO> reqLogin(@RequestBody MemberReqDTO.LoginReqDTO dto,
+    /*
+     * (H-8) @Valid 가 없으면 DTO 의 @NotNull·@Email 은 <b>선언만 되고 실행되지 않는 죽은 애너테이션</b>이다.
+     * Bean Validation 은 @Valid(또는 @Validated)가 붙은 파라미터에만 트리거된다.
+     * 이게 빠져 있어 email/password 가 null 인 요청도 그대로 서비스 계층까지 내려갔다.
+     *
+     * 검증 실패는 ExceptionAdvice.handleMethodArgumentNotValid 가 잡아
+     * APIResponse(REQUEST_INVALID) + 필드별 메시지로 내려간다 — 다른 컨트롤러와 응답 형태가 같다.
+     */
+    public APIResponse<MemberRespDTO.LoginRespDTO> reqLogin(@Valid @RequestBody MemberReqDTO.LoginReqDTO dto,
                                                             HttpServletRequest request,
                                                             HttpServletResponse response) {
 
@@ -126,7 +135,8 @@ public class MemberController {
 
     @PostMapping("/signin")
     // @Operation(summary = "회원가입 API", description = "이메일 중복 체크, 이메일 인증 코드 검증 이후 최종적으로 사용자가 입력한 정보를 바탕으로 회원가입을 요청하는 API 입니다.")
-    public APIResponse<MemberRespDTO.SimpleAPIRespDTO> signIn(@RequestBody MemberReqDTO.SignInRequestDTO dto) {
+    // (H-8) 위 reqLogin 과 같은 이유. 회원가입은 잘못된 값이 그대로 저장되므로 영향이 더 크다.
+    public APIResponse<MemberRespDTO.SimpleAPIRespDTO> signIn(@Valid @RequestBody MemberReqDTO.SignInRequestDTO dto) {
         memberService.signIn(dto);
         return APIResponse.onSuccess(MemberRespDTO.SimpleAPIRespDTO.builder().isSuccess(true).build(), MemberSuccessCode.SIGN_IN_SUCCESS); // bool 값 리턴,
     }
