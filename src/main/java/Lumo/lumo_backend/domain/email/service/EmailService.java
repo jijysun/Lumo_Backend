@@ -75,9 +75,12 @@ public class EmailService {
                 .description("SMTP 발송 1건 소요 시간")
                 .register(meterRegistry);
 
+        // Prometheus 전용 mail.send.result 성공 카운터에 failure="none" 추가
+        // - Micrometer 는 예외 대신 WARN 한 줄만 남기고 이후는 debug 로 강등 — 조용히 지표만 뭉개지는 유형
         sendSuccess = Counter.builder("mail.send.result")
                 .description("메일 발송 결과 건수")
                 .tag("result", "success")
+                .tag("failure", "none")
                 .register(meterRegistry);
 
         // (A-6) 실패를 성격별로 나눈다. 합계만 보면 "SMTP 가 죽었다" 와

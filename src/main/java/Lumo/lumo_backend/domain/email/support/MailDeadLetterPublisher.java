@@ -30,12 +30,27 @@ public class MailDeadLetterPublisher {
     private final RedisTemplate<String, String> redisTemplate;
     private final MeterRegistry meterRegistry;
 
-    private Counter dlqCounter;
+    private Counter dlqSuccess;
+    private Counter dlqFailure;
 
     @PostConstruct
     void initMetrics() {
-        dlqCounter = Counter.builder("mail.dlq.total")
-                .description("재시도를 포기하고 DLQ 로 보낸 메일 건수")
+        /*
+         * 적재 성공만 세면 "조용한 소실" 이 관측되지 않는다.
+         * publish() 는 예외를 삼키고, 호출부는 그와 무관하게 원본을 XACK 한다.
+         * 즉 Redis 가 흔들리는 동안에는 원본이 확인 처리되고 DLQ 에도 없는 상태가 되는데,
+         * 이전에는 그 사실이 로그 한 줄로만 남았다. A-1 의 설계 판단 3("실패도 기록한다")과 어긋난다.
+         *
+         * ⚠️ 태그 키 집합을 처음부터 통일한다 — M-21 과 같은 함정을 두 번 밟지 않기 위해서다.
+         */
+        dlqSuccess = Counter.builder("mail.dlq.total")
+                .description("DLQ 이관 시도 건수")
+                .tag("result", "success")
+                .register(meterRegistry);
+
+        dlqFailure = Counter.builder("mail.dlq.total")
+                .description("DLQ 이관 시도 건수")
+                .tag("result", "fail")
                 .register(meterRegistry);
     }
 
@@ -60,7 +75,7 @@ public class MailDeadLetterPublisher {
                     StreamRecords.newRecord().in(MailStream.DLQ_KEY).ofMap(payload),
                     XAddOptions.maxlen(MailStream.DLQ_MAX_LEN).approximateTrimming(true));
 
-            dlqCounter.increment();
+            dlqSuccess.increment();
             log.error("[MailDLQ] {} moved to DLQ — reason={}, deliveries={}",
                     record.getId(), reason, deliveryCount);
 
@@ -69,7 +84,9 @@ public class MailDeadLetterPublisher {
              * DLQ 적재가 실패해도 원본은 호출부에서 XACK 된다.
              * 여기서 예외를 올리면 XACK 을 못 해 같은 항목이 영원히 회수·실패를 반복한다.
              */
-            log.error("[MailDLQ] failed to publish {} to DLQ", record.getId(), e);
+            dlqFailure.increment();
+            log.error("[MailDLQ] failed to publish {} to DLQ — 원본은 호출부에서 XACK 되므로 이 건은 소실된다",
+                    record.getId(), e);
         }
     }
 }
