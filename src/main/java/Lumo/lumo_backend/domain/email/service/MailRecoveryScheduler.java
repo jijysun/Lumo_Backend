@@ -3,6 +3,9 @@ package Lumo.lumo_backend.domain.email.service;
 import Lumo.lumo_backend.domain.email.support.MailDeadLetterPublisher;
 import Lumo.lumo_backend.global.redis.MailStream;
 import Lumo.lumo_backend.global.redis.MailStreamInitializer;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
@@ -16,6 +19,8 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * 죽은 워커가 물고 있던 작업을 회수한다 (A-5 / G-1).
@@ -39,6 +44,29 @@ public class MailRecoveryScheduler {
     private final EmailService emailService;
     private final MailStreamInitializer streamInitializer;
     private final MailDeadLetterPublisher deadLetterPublisher;
+    private final MeterRegistry meterRegistry;
+
+    /**
+     * 회수 전용 풀
+     * 필드명이 곧 빈 이름이다 — Executor 타입 빈이 여러 개라 타입만으로는 결정되지 않는다.
+     */
+    private final Executor mailRecoveryExecutor;
+
+    private Counter recoverySubmitted;
+    private Counter recoveryRejected;
+
+    @PostConstruct
+    void initMetrics() {
+        recoverySubmitted = Counter.builder("mail.recovery.total")
+                .description("회수 항목의 재발송 제출 결과")
+                .tag("result", "submitted")
+                .register(meterRegistry);
+
+        recoveryRejected = Counter.builder("mail.recovery.total")
+                .description("회수 항목의 재발송 제출 결과")
+                .tag("result", "rejected")
+                .register(meterRegistry);
+    }
 
     /**
      * ⚠️ 블루-그린 전환 중에는 두 컨테이너가 동시에 이 스케줄러를 돌린다.
@@ -108,11 +136,34 @@ public class MailRecoveryScheduler {
 
                 for (MapRecord<String, Object, Object> record : claimed) {
                     try {
-                        // 실제 전달 횟수를 넘겨야 DLQ 기록의 deliveries 값이 사실과 맞는다.
-                        emailService.process(record, deliveryCount);
-                    } catch (Exception e) {
-                        // 재발송이 또 실패했다. PEL 에 남으므로 다음 주기에 delivery count 가 올라간다.
-                        log.error("[MailRecovery] resend failed for {}", record.getId(), e);
+                        /*
+                         * 발송을 전용 풀에 위임
+                         * - process() 직접 호출 = SMTP 왕복 (3~5s) = @Scheduled 라 TaskScheduler 스레드가 처리
+                         * = 최대 SCAN_LIMIT(100) 건이므로 최악 500 초 동안 스케줄러를 물고 늘어짐
+                         */
+                        mailRecoveryExecutor.execute(() -> {
+                            try {
+                                emailService.process(record, deliveryCount);
+                            } catch (Exception e) {
+                                // 람다 안에서 잡아야 한다 — execute() 는 fire-and-forget 이라 밖에서는 이 예외를 볼 수 없음
+
+                                log.error("[MailRecovery] resend failed for {}", record.getId(), e);
+                            }
+                        });
+                        recoverySubmitted.increment();
+
+                    } catch (RejectedExecutionException e) {
+                        /*
+                         * 큐가 찬 경우 회차 종료
+                         *
+                         * 계속 순회하면 XCLAIM 이 남은 항목의 delivery count 만 올려놓고 발송은 못 해서,
+                         * "한 번도 안 보냈는데 max-delivery-exceeded 로 DLQ 행" 이 되버림
+                         * 지금 멈추면 미처리분은 PEL 에 그대로 있으므로 다음 주기에 다시 잡힌다.
+                         */
+                        recoveryRejected.increment();
+                        log.warn("[MailRecovery] recovery pool saturated — deferring {} to next cycle",
+                                record.getId());
+                        return;
                     }
                 }
             }
