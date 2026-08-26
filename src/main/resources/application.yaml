@@ -41,6 +41,14 @@ spring:
   # (M-2) 마이그레이션은 src/main/resources/db/migration 의 V*.sql 로만 적용한다.
   # baseline-on-migrate: 이력 테이블이 없는 기존 DB(스냅샷 복원 등)를 만나면
   #   V1 을 이미 적용된 것으로 간주하고 V2 부터 실행한다. 새 DB 는 V1 부터 전부 실행된다.
+  # (H-10) @Scheduled 는 @Async 와 완전히 다른 인프라를 쓴다 — TaskScheduler 는 기본 스레드 1개다.
+  # MailRecoveryScheduler 가 회수분 SMTP 를 그 스레드에서 처리하면 타 도메인 배치(자정 통계 등)가
+  # 그 뒤로 줄을 서서 조용히 수 분씩 늦게 돈다. 예외가 안 나므로 아무도 모르는 유형의 지연이다.
+  task:
+    scheduling:
+      pool:
+        size: 4
+
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -91,6 +99,14 @@ jwt:
 # enabled=true 일 때만 빈이 등록된다. 기본값 false 이므로 평상시 배포에는 영향 없음.
 # .env 는 배포마다 workflow 가 덮어쓰므로 측정 회차 변수는 셸 환경변수로 주입할 것.
 #   LOADTEST_SEED_ENABLED=true LOADTEST_SEED_USER_COUNT=500 sudo -E docker compose up -d Blue
+# 메일 발송 워커 수 (M-24).
+# AsyncConfig.mailWorkerExecutor 의 core/max 와 WorkerInitializer 의 기동 개수를 동시에 결정한다.
+# G-4(워커 수 근거 확보)는 이 값을 바꿔가며 재는 것이 전제이므로 재빌드 없이 조정 가능해야 한다.
+#   MAIL_WORKER_COUNT=30 sudo -E docker compose up -d Blue
+mail:
+  worker:
+    count: ${MAIL_WORKER_COUNT:15}
+
 loadtest:
   seed:
     enabled: ${LOADTEST_SEED_ENABLED:false}
