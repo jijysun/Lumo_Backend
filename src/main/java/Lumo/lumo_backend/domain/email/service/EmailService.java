@@ -69,6 +69,9 @@ public class EmailService {
     private Counter failTransient;
     private Counter failPermanent;
 
+    /** 보낼 이유가 사라진 항목. 실패가 아니라 무효화라 DLQ 로 보내지 않는다. */
+    private Counter sendDiscarded;
+
     @PostConstruct
     void initMetrics() {
         sendTimer = Timer.builder("mail.send.duration")
@@ -95,6 +98,13 @@ public class EmailService {
                 .description("메일 발송 결과 건수")
                 .tag("result", "fail")
                 .tag("failure", "permanent")
+                .register(meterRegistry);
+
+        // 폐기는 실패가 아니므로 failure="none". 키 집합은 위와 동일하게 {result, failure} 다.
+        sendDiscarded = Counter.builder("mail.send.result")
+                .description("메일 발송 결과 건수")
+                .tag("result", "discarded")
+                .tag("failure", "none")
                 .register(meterRegistry);
     }
 
@@ -183,6 +193,36 @@ public class EmailService {
         if (email == null || code == null) {
             // 필드가 깨진 항목은 재시도해도 영원히 실패한다. 회수 루프에 남기지 않고 DLQ 로 보낸다.
             deadLetterPublisher.publish(record, "malformed-record", deliveryCount);
+            acknowledge(record);
+            return;
+        }
+
+        /*
+         * 이 작업이 아직 유효한가.
+         *
+         * 인증 코드는 MemberService 에서 3분 TTL 로 저장된다. 그런데 회수 임계가 60초이고
+         * 회수 처리에도 시간이 걸리므로, 회수된 시점에는 이미 만료됐을 수 있다.
+         * 그대로 보내면 사용자는 쓸 수 없는 코드를 받고 발송 한도만 소모한다.
+         *
+         * 워커 경로도 안전하지 않다 — 앱이 몇 분간 죽어 있었다면 죽기 전 XADD 된 항목은
+         * 여전히 "신규" 라 워커가 ">" 로 읽어가는데, 그때 코드는 이미 만료돼 있다.
+         * 그래서 회수 스케줄러가 아니라 두 경로가 공유하는 여기에 둔다.
+         *
+         * 한 조건으로 두 경우를 모두 잡는다.
+         *   current == null   → 만료됐거나 verifyCode 성공으로 소비됨
+         *   current != code   → 사용자가 재요청해 새 코드가 발급됨 (이 레코드는 구버전)
+         *
+         * 후자가 특히 중요하다. 구버전을 나중에 보내면 받은편지함에 "유효한 코드 → 무효한 코드"
+         * 순으로 도착해 최신 메일이 오히려 못 쓰게 된다.
+         *
+         * ⚠️ Redis 가 죽어 get() 이 던지면 여기서 예외가 나가고 XACK 되지 않는다 →
+         *    PEL 에 남아 다음 회차에 재시도된다. 다른 Redis 실패와 같은 거동이라 별도 처리하지 않는다.
+         *    fail-open(장애 시 그냥 발송)으로 만들면 만료 메일이 대량 발송된다.
+         */
+        String current = redisTemplate.opsForValue().get(email);
+        if (!code.equals(current)) {
+            sendDiscarded.increment();
+            log.info("[EmailService] stale record {} discarded — code expired or superseded", record.getId());
             acknowledge(record);
             return;
         }
