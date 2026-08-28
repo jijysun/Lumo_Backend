@@ -7,8 +7,8 @@ import Lumo.lumo_backend.domain.setting.service.FeedbackService;
 import Lumo.lumo_backend.global.apiResponse.APIResponse;
 import Lumo.lumo_backend.global.apiResponse.status.SuccessCode;
 import Lumo.lumo_backend.global.security.userDetails.CustomUserDetails;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
+// import io.swagger.v3.oas.annotations.Operation;
+// import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -21,18 +21,18 @@ import org.springframework.web.bind.annotation.*;
 @Slf4j
 @RequiredArgsConstructor
 @RequestMapping("/api/feedbacks")
-@Tag(name = "피드백 API", description = "피드백 관련 API 입니다.")
+// @Tag(name = "피드백 API", description = "피드백 관련 API 입니다.")
 public class FeedbackController {
 
     private final FeedbackService feedbackService;
 
     @PostMapping
-    @Operation(summary = "피드백 생성", description = "피드백을 생성합니다.")
+    // @Operation(summary = "피드백 생성", description = "피드백을 생성합니다.")
     public APIResponse<Long> create(
             @AuthenticationPrincipal CustomUserDetails userDetail,
             @RequestBody FeedbackCreateReqDTO request
     ) {
-        return APIResponse.onSuccess(feedbackService.create(userDetail.getMember().getId(), request), SuccessCode.OK);
+        return APIResponse.onSuccess(feedbackService.create(userDetail.getMemberId(), request), SuccessCode.OK);
     }
 
 
@@ -42,7 +42,7 @@ public class FeedbackController {
             @PathVariable Long feedbackId
     ) {
 
-//        return APIResponse.onSuccess(feedbackService.get(userDetail.getMember().getId(), feedbackId), SuccessCode.OK);
+//        return APIResponse.onSuccess(feedbackService.get(userDetail.getMemberId(), feedbackId), SuccessCode.OK);
         return APIResponse.onSuccess(null, SuccessCode.OK);
     }
 
@@ -52,7 +52,7 @@ public class FeedbackController {
             @PathVariable Long feedbackId,
             @RequestBody FeedbackUpdateReqDTO request
     ) {
-//        feedbackService.update(userDetail.getMember().getId(), feedbackId, request);
+//        feedbackService.update(userDetail.getMemberId(), feedbackId, request);
 
         return APIResponse.onSuccess(null, SuccessCode.OK);
     }

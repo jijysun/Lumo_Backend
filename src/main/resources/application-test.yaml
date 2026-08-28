@@ -12,15 +12,19 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      # 운영과 같은 정책을 쓴다. 로컬에서 먼저 깨져야 마이그레이션 오류를 잡을 수 있다 (M-2).
+      ddl-auto: validate
+    # show-sql / format_sql 비활성화. 측정 오염 방지
+#    show-sql: true
     properties:
       hibernate:
-        format_sql: true
+#        format_sql: true
         dialect: org.hibernate.dialect.MySQL8Dialect
 
   mail:
-    host: mailhog
+    # compose 서비스명이 mailhog -> mailpit 으로 바뀌었다(20260813).
+    # 지금까지는 compose 의 SPRING_MAIL_HOST 가 덮어써서 드러나지 않았을 뿐이다.
+    host: mailpit
     port: 1025
     username: dummy
     password: dummy
@@ -51,4 +55,8 @@ management:
 
 jwt:
   secret:
-    key: aksdbfkahskdjfhaks
+    # 로컬 test 프로파일 전용 더미 키 (운영 키 아님).
+    # C-4 수정으로 이 값은 Base64 "디코딩" 되므로, 디코딩 후 32바이트(256bit) 이상이어야 한다.
+    # 이전 값 'aksdbfkahskdjfhaks'(18바이트)는 규격 미달이라 기동 자체가 실패했다 (M-17).
+    # 운영 키 생성: openssl rand -base64 32
+    key: bHVtby1sb2NhbC10ZXN0LXNlY3JldC1rZXktMzJieXQ=

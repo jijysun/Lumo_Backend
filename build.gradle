@@ -20,18 +20,30 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-	implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+	// (M-10) reactive 스택 위에서 동기 RedisTemplate 만 쓰고 있었다 → 동기 스타터로 교체
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
-    implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
+	/*
+	 * (H-8) 이전에는 API 만 선언되어 있었다 — 구현체(Hibernate Validator)가 없으면
+	 * @Valid 를 붙여도 런타임에 아무 일도 일어나지 않는다. 실증: null 이메일로 로그인 요청 시
+	 * 검증에서 걸리지 않고 서비스까지 내려가 CANT_FOUND_MEMBER 가 반환됐다.
+	 * 스타터는 API + Hibernate Validator 를 함께 가져오고 버전도 BOM 이 관리한다.
+	 */
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-mail'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator' // prometheus, blue-green checking
 	implementation 'org.springframework.boot:spring-boot-starter'
 
-	// swagger
-	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.15'
-	implementation 'org.apache.commons:commons-lang3:3.18.0' // springdoc의 의존 라이브러리. 이전 버전 취약성 문제
-	implementation 'io.swagger.core.v3:swagger-annotations:2.2.38' // openai 의존성 충돌 해결
+	// (M-2) 스키마 소유권을 Hibernate hbm2ddl 에서 Flyway 로 이관.
+	// MySQL 은 Flyway 10 부터 별도 모듈이 필요하다.
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.flywaydb:flyway-mysql'
+
+	// swagger — 프로젝트 경량화를 위해 제거 (20260813). 되살릴 때 3줄 모두 해제할 것.
+	// implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.15'
+	// implementation 'org.apache.commons:commons-lang3:3.18.0' // springdoc의 의존 라이브러리. 이전 버전 취약성 문제
+	// implementation 'io.swagger.core.v3:swagger-annotations:2.2.38' // openai 의존성 충돌 해결
 
 	// jwt
 	implementation 'io.jsonwebtoken:jjwt-api:0.12.5'
@@ -49,7 +61,6 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
 
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
-	testImplementation 'io.projectreactor:reactor-test'
 	testImplementation 'org.springframework.security:spring-security-test'
 	testImplementation 'org.mockito:mockito-core:5.8.0'
 

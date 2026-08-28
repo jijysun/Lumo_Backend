@@ -32,6 +32,7 @@ public enum ErrorCode implements BaseErrorCode {
     CANNOT_FOUND_RT(HttpStatus.UNAUTHORIZED, "SERVER_4104", "리프레쉬 토큰을 찾을 수 없습니다."),
 
     AUTH_FORBIDDEN(HttpStatus.FORBIDDEN, "SERVER_4300", "접근 권한이 없습니다."),
+    TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "SERVER_4290", "요청이 너무 많습니다. 잠시 후 다시 시도해주세요."),
 
     // 500 계열: 서버 측 오류
     SYSTEM_INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "SERVER_5000", "서버 내부 오류가 발생했습니다."),

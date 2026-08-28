@@ -1,7 +1,7 @@
 package Lumo.lumo_backend.domain.setting.dto;
 
 import Lumo.lumo_backend.domain.setting.entity.MemberDevice;
-import io.swagger.v3.oas.annotations.media.Schema;
+// import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
@@ -12,9 +12,9 @@ import java.util.stream.Collectors;
 @AllArgsConstructor
 public class MemberDeviceResDTO {
 
-    @Schema(
-            description = "기기 목록"
-    )
+    // @Schema(
+            // description = "기기 목록"
+    // )
     private List<MemberDeviceDTO> deviceList;
 
 

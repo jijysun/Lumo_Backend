@@ -51,7 +51,10 @@ public class RoutineService {
 
 
     @Transactional
-    public void deleteRoutine(Member member, Long routineId) {
+    public void deleteRoutine(Long memberId, Long routineId) {
+        // (G-6) 컨트롤러가 더 이상 Member 엔티티를 넘기지 않는다. 프록시는 SELECT 를 발생시키지 않으며,
+        // 연관 설정과 FK 비교에는 식별자만 있으면 충분하다.
+        Member member = memberRepository.getReferenceById(memberId);
         Member reqMember = memberRepository.findById(member.getId()).orElseThrow(() -> new GeneralException(MemberErrorCode.CANT_FOUND_MEMBER));
         Routine routine = routineRepository.findByIdAndMember_Id(routineId, reqMember.getId()).orElseThrow(() -> new RoutineException(RoutineErrorCode.ROUTINE_NOT_FOUND));
 
@@ -60,7 +63,10 @@ public class RoutineService {
     }
 
     @Transactional
-    public void renameRoutine(Member member, Long routineId, String title) {
+    public void renameRoutine(Long memberId, Long routineId, String title) {
+        // (G-6) 컨트롤러가 더 이상 Member 엔티티를 넘기지 않는다. 프록시는 SELECT 를 발생시키지 않으며,
+        // 연관 설정과 FK 비교에는 식별자만 있으면 충분하다.
+        Member member = memberRepository.getReferenceById(memberId);
         Member reqMember = memberRepository.findById(member.getId()).orElseThrow(() -> new GeneralException(MemberErrorCode.CANT_FOUND_MEMBER));
         Routine routine = routineRepository.findByIdAndMember_Id(routineId, reqMember.getId()).orElseThrow(() -> new RoutineException(RoutineErrorCode.ROUTINE_NOT_FOUND));
 

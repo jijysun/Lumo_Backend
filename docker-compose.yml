@@ -1,38 +1,144 @@
+# 이미지 태그는 .env 또는 셸 환경변수로 지정한다.
+#   예) LUMO_TAG=ctrl-7a28965 docker compose up -d Blue
+#   미지정 시 latest 로 동작하므로 기존 배포 흐름과 호환된다.
 services:
   Blue:
-    build: .
-    image: jijysun/lumo:latest
+    # build 지시자를 두지 않는다 — EC2 에는 소스가 없고(scp 대상은 compose·deploy.sh·monitoring 뿐),
+    image: ${LUMO_IMAGE:-jijysun/lumo}:${LUMO_TAG:-latest}
     container_name: Lumo_Blue
     ports:
       - "8081:8080"
-    #    depends_on:
-    #      - redis
+    depends_on:
+      # Redis 는 기동 즉시 필요하다 — WorkerInitializer 가 부팅 시점에 컨슈머 그룹을 만든다.
+      # mysql 은 profiles 로 분리돼 있어 여기에 걸지 않는다 (RDS 전환 대비).
+      redis:
+        condition: service_healthy
+    environment:
+      # application.yaml 의 spring.mail.port 가 587 로 하드코딩되어 있다.
+      # 미지정 시 587(현행 동작), 측정 회차에는 SPRING_MAIL_PORT=1025 로 Mailpit 을 가리킨다.
+      # 호스트는 .env 의 MAIL_SENDER_HOST 로 계속 제어한다 (측정 시 mailpit).
+      - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
     env_file: .env
     networks:
       - my-network
     restart: on-failure
 
   Green:
-    build: .
-    image: jijysun/lumo:latest
+    # Blue 와 동일 — 이미지는 pull 만
+    image: ${LUMO_IMAGE:-jijysun/lumo}:${LUMO_TAG:-latest}
     container_name: Lumo_Green
     ports:
       - "8082:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # application.yaml 의 spring.mail.port 가 587 로 하드코딩되어 있다.
+      # 미지정 시 587(현행 동작), 측정 회차에는 SPRING_MAIL_PORT=1025 로 Mailpit 을 가리킨다.
+      # 호스트는 .env 의 MAIL_SENDER_HOST 로 계속 제어한다 (측정 시 mailpit).
+      - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
     env_file: .env
     networks:
       - my-network
     restart: on-failure
 
-  #  redis:
-  #    image: redis:alpine
-  #    container_name: Lumo_Redis
-  #    ports:
-  #      - "6379:6379"
-  #    volumes:
-  #      - redis_data:/data
-  #    networks:
-  #      - lumo-network
-  #    restart: on-failure
+  # ── Redis — 컨테이너 운영 (ElastiCache 대체) ────────────────────────────
+  #
+  # ElastiCache 를 쓰지 않는 이유
+  #  ① ElastiCache 에는 stop 기능이 없다. 클러스터가 available 인 한 사용 여부와
+  #     무관하게 과금되고, 멈추려면 "삭제" 밖에 없다 (EC2·RDS 와 다르다).
+  #  ② Lumo 의 Redis 내용물은 전부 재생성 가능하다 —
+  #     인증코드(3분 TTL) · RT · rate limit 카운터 · 메일 스트림. 보존할 원본이 없다.
+  #  ③ 메일 파이프라인 측정에서 Redis 는 핫패스다(XADD / XREADGROUP / XACK).
+  #     같은 호스트면 loopback 이라 네트워크 왕복이 빠지고, SMTP 병목이 더 선명하게 드러난다.
+  #
+  # ⚠️ 대가 — EC2 자체가 죽으면 스트림도 같이 죽는다.
+  #    A-5 의 at-least-once 는 <b>프로세스 장애</b>를 방어하지 <b>호스트 장애</b>를 방어하지 않는다.
+  #    S4 카오스 테스트는 앱 컨테이너만 죽이므로 측정에는 영향이 없다.
+  redis:
+    image: redis:8-alpine
+    container_name: Lumo_Redis
+    command:
+      # appendonly — 재시작해도 스트림과 PEL 이 살아남는다.
+      # 이게 없으면 Redis 를 건드리는 순간 "유실 0" 의 전제가 깨진다.
+      - redis-server
+      - --appendonly
+      - "yes"
+    ports:
+      # 127.0.0.1 바인딩 — 호스트에서 redis-cli 로만 붙는다.
+      # "6379:6379" 로 쓰면 0.0.0.0 에 열려 인터넷에 그대로 노출된다.
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - my-network
+    restart: unless-stopped
+
+  # ── MySQL — 컨테이너 운영 (RDS 전환 전까지) ──────────────────────────────
+  #
+  # profiles 로 묶여 있어 명시할 때만 뜬다:
+  #   sudo docker compose --profile localdb up -d mysql
+  #
+  # RDS 로 전환하면 이 서비스를 그냥 띄우지 않고 MYSQL_HOST 만 엔드포인트로 바꾸면 된다.
+  # compose 를 수정할 필요가 없도록 Blue/Green 에 depends_on 을 걸지 않았다.
+  # 그 대가로 첫 기동에서 Flyway 가 DB 를 못 찾아 한 번 죽을 수 있으나,
+  # restart: on-failure 가 재시도하고 deploy.sh 헬스체크가 최대 70초를 기다린다.
+  mysql:
+    image: mysql:8.0
+    container_name: Lumo_MySQL
+    profiles: ["localdb"]
+    environment:
+      # ⚠️ MYSQL_USERNAME 은 반드시 root 여야 한다.
+      #    공식 mysql 이미지는 MYSQL_USER=root 를 거부하고 기동에 실패한다.
+      #    다른 계정을 쓰려면 MYSQL_USER / MYSQL_PASSWORD 를 따로 추가할 것.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_NAME}
+    command:
+      # application.yaml 의 JDBC URL 에는 serverTimezone 파라미터가 없어 서버 기본값을 그대로 따른다.
+      # 호스트를 Asia/Seoul 로 맞추므로 DB 도 +09:00 으로 맞춘다.
+      # (RDS 전환 시 파라미터 그룹에 동일 설정을 넣어야 저장된 시각이 어긋나지 않는다)
+      - --default-time-zone=+09:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - my-network
+    restart: unless-stopped
+
+  # 측정용 메일 sink. 평상시에는 기동하지 않고 profile 을 명시할 때만 뜬다.
+  #   docker compose --profile measure up -d mailpit
+  # SMTP(1025) 는 호스트에 노출하지 않는다 — 앱이 my-network 내부에서 mailpit:1025 로 접속한다.
+  # 웹 UI(8025) 만 노출하며, 접근 제한은 보안그룹에서 본인 IP 만 허용하는 것으로 처리한다.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: Lumo_Mailpit
+    profiles: ["measure"]
+    environment:
+      # Mailpit 은 기본적으로 SMTP AUTH 를 거부한다. 앱이 자격증명을 들고 오므로 열어준다.
+      - MP_SMTP_AUTH_ACCEPT_ANY=true
+      - MP_SMTP_AUTH_ALLOW_INSECURE=true
+      # ⚠️ 기본 보관 상한이 500 통이다. 그대로 두면 1000 건 부하 시 오래된 메일이 잘려나가
+      #    "수신 건수 = 소실 측정" 자체가 무너진다. 0 = 무제한.
+      - MP_MAX_MESSAGES=0
+    ports:
+      - "8025:8025" # Web UI (보안그룹에서 본인 IP 만 허용)
+    networks:
+      - my-network
+    restart: unless-stopped
 
   # 이후 성능 측정 툴 대비
   prometheus:
@@ -60,7 +166,9 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=0000
+      # (M-8) 하드코딩 제거. .env / GitHub Secrets(GRAFANA_ADMIN_PASSWORD)로 주입한다.
+      #       미지정 시 기동을 막지 않되 기본값이 그대로 노출되지 않도록 필수값으로 둔다.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD 를 .env 에 설정하세요}
       - GF_USERS_ALLOW_SIGN_UP=false # 회원가입 비활성화
     depends_on:
       - prometheus
@@ -97,7 +205,8 @@ services:
 volumes:
   grafana_data: # Grafana 데이터 영속성을 위한 볼륨 정의
   prometheus_data:
-#  redis_data:
+  redis_data:
+  mysql_data:
 
 networks:
   my-network:

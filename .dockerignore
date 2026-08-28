@@ -1,0 +1,30 @@
+# 빌드 컨텍스트 축소 — Dockerfile 이 COPY 하는 건
+# gradlew / gradle / build.gradle / settings.gradle / src 뿐이다.
+# 아래 항목이 섞여 들어가면 전송량이 늘고, 내용이 바뀔 때마다 레이어 캐시가 깨진다.
+
+.git
+.github
+.gitignore
+.gitattributes
+
+# Gradle 산출물·캐시 (호스트에서 빌드한 흔적이 이미지 빌드에 섞이지 않도록)
+build/
+.gradle/
+
+# IDE
+.idea/
+*.iml
+*.iws
+
+# 배포·관측 설정 — 이미지가 아니라 EC2 로 scp 되는 것들
+docker-compose.yml
+docker-compose-local.yml
+Dockerfile
+scripts/
+monitoring/
+
+# 문서·환경 템플릿
+*.md
+.env
+.env.*
+!.env.example
