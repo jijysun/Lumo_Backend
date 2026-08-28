@@ -5,6 +5,7 @@
 #   DOCKER_USERNAME / DOCKER_PASSWORD : Docker Hub
 #   EC2_HOST / EC2_USERNAME / EC2_PRIVATE_KEY
 #   MYSQL_* / MAIL_SENDER_* / REDIS_* / JWT_SECRET_KEY / OPENAI_API_KEY
+#   DISCORD_WEBHOOK_URL : 배포 성공/실패 알림용 웹훅 URL (미설정 시 알림만 조용히 생략)
 #
 # 대조군 재현 배포
 #   Actions > 이 워크플로 > Run workflow > ref 에 커밋 SHA 입력 (예: 7a28965)
@@ -86,8 +87,19 @@ jobs:
   ec2-deploy:
     needs: build-and-push-to-docker
     runs-on: ubuntu-latest
+    outputs:
+      start_time: ${{ steps.start.outputs.start_time }}
+      ram_avail: ${{ steps.resources.outputs.ram_avail }}
+      swap_used: ${{ steps.resources.outputs.swap_used }}
+      active_color: ${{ steps.resources.outputs.active_color }}
+      health: ${{ steps.resources.outputs.health }}
 
     steps:
+      # 알림의 "소요 시간" 기준점. 반드시 첫 스텝이어야 실제 배포 시간이 나온다.
+      - name: record start time
+        id: start
+        run: echo "start_time=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: checking repo...
         uses: actions/checkout@v4
         with:
@@ -145,3 +157,162 @@ jobs:
 
             chmod +x scripts/deploy.sh
             sudo bash ./scripts/deploy.sh 2>&1 | sudo tee deploy.log
+
+      # 알림에 실을 서버 상태 수집.
+      # continue-on-error — 수집이 실패해도 배포 자체는 성공이다. 여기서 잡을 빨갛게 만들면
+      # "배포는 됐는데 알림용 조회만 실패한" 경우를 실패로 오판하게 된다.
+      - name: collect ec2 state
+        id: resources
+        continue-on-error: true
+        run: |
+          echo "${{ secrets.EC2_PRIVATE_KEY }}" > ec2_key.pem
+          chmod 400 ec2_key.pem
+          SSH="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}"
+
+          RAM=$($SSH "free -h | awk '/^Mem:/{print \$7}'" || true)
+          SWAP=$($SSH "free -h | awk '/^Swap:/{print \$3}'" || true)
+
+          # 블루-그린 특화 — deploy.sh 가 방금 쓴 service-url.inc 로 활성 컨테이너를 판정한다
+          PORT=$($SSH "grep -oE '8081|8082' /etc/nginx/conf.d/service-url.inc" || true)
+          case "$PORT" in
+            8081) COLOR="🔵 Blue (8081)" ;;
+            8082) COLOR="🟢 Green (8082)" ;;
+            *)    COLOR="판정 실패" ;;
+          esac
+
+          HEALTH=$($SSH "curl -s --max-time 5 http://localhost:${PORT:-8081}/actuator/health | jq -r '.status // empty'" || true)
+
+          echo "ram_avail=${RAM:-N/A}"     >> "$GITHUB_OUTPUT"
+          echo "swap_used=${SWAP:-N/A}"    >> "$GITHUB_OUTPUT"
+          echo "active_color=${COLOR}"     >> "$GITHUB_OUTPUT"
+          echo "health=${HEALTH:-N/A}"     >> "$GITHUB_OUTPUT"
+          rm -f ec2_key.pem
+
+  # ===================== 3. 디스코드 알림 =====================
+  notify:
+    needs: [build-and-push-to-docker, ec2-deploy]
+    runs-on: ubuntu-latest
+    if: always() # 성공/실패/취소 무관하게 항상 돈다
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      # workflow_dispatch 로 과거 커밋을 지정하면 github.sha 와 어긋나므로 빌드 잡의 출력을 쓴다
+      COMMIT_SHA: ${{ needs.build-and-push-to-docker.outputs.image_tag }}
+      COMMIT_MSG: ${{ github.event.head_commit.message }}
+      AUTHOR: ${{ github.actor }}
+      BRANCH: ${{ github.ref_name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ needs.build-and-push-to-docker.outputs.image_tag }}
+      # 실패 시 멘션할 대상. 개인 레포라 기본은 비워둔다.
+      #   역할 멘션: "<@&역할ID>"   /   본인 멘션: "<@사용자ID>"
+      ROLE_MENTION: ""
+    steps:
+      - name: calculate duration
+        id: duration
+        run: |
+          START=${{ needs.ec2-deploy.outputs.start_time }}
+          END=$(date +%s)
+          START=${START:-$END} # 배포 잡이 시작 전에 취소된 경우 방어
+          DIFF=$((END - START))
+          MIN=$((DIFF / 60))
+          SEC=$((DIFF % 60))
+          if [ $MIN -eq 0 ]; then
+            echo "time=${SEC}초" >> "$GITHUB_OUTPUT"
+          else
+            echo "time=${MIN}분 ${SEC}초" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: discord — success
+        if: needs.ec2-deploy.result == 'success'
+        run: |
+          # 웹훅이 없으면 조용히 넘어간다. 여기서 실패하면 배포가 성공했는데도 파이프라인이 빨개진다.
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK_URL 미설정 — 알림을 생략합니다."
+            exit 0
+          fi
+
+          # 상세 커밋 메시지가 길다. Discord embed 필드 상한이 1024자라 잘라서 보낸다.
+          MSG=$(printf '%s' "${COMMIT_MSG:-manual run}" | head -n 6 | head -c 900)
+
+          payload=$(jq -n \
+            --arg sha "${COMMIT_SHA:0:7}" \
+            --arg msg "$MSG" \
+            --arg url "$RUN_URL" \
+            --arg curl "$COMMIT_URL" \
+            --arg author "$AUTHOR" \
+            --arg branch "$BRANCH" \
+            --arg duration "${{ steps.duration.outputs.time }}" \
+            --arg color "${{ needs.ec2-deploy.outputs.active_color }}" \
+            --arg health "${{ needs.ec2-deploy.outputs.health }}" \
+            --arg mem "RAM 여유 ${{ needs.ec2-deploy.outputs.ram_avail }} / SWAP 사용 ${{ needs.ec2-deploy.outputs.swap_used }}" \
+            '{embeds: [{
+              title: "Lumo Backend 배포 성공",
+              color: 5763719,
+              fields: [
+                {name: "브랜치", value: $branch, inline: true},
+                {name: "작성자", value: $author, inline: true},
+                {name: "커밋", value: "[\( $sha )](\( $curl ))", inline: true},
+                {name: "활성 컨테이너", value: $color, inline: true},
+                {name: "헬스체크", value: $health, inline: true},
+                {name: "소요 시간", value: $duration, inline: true},
+                {name: "서버 리소스", value: $mem, inline: false},
+                {name: "메시지", value: $msg, inline: false},
+                {name: "Actions 로그", value: "[바로가기](\( $url ))", inline: false}
+              ],
+              footer: {text: "Lumo Production (EC2 · m7g.xlarge · arm64)"}
+            }]}')
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+
+      - name: discord — failure
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        env:
+          BUILD_RESULT: ${{ needs.build-and-push-to-docker.result }}
+          DEPLOY_RESULT: ${{ needs.ec2-deploy.result }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK_URL 미설정 — 알림을 생략합니다."
+            exit 0
+          fi
+
+          MSG=$(printf '%s' "${COMMIT_MSG:-manual run}" | head -n 6 | head -c 900)
+
+          # 어느 단계에서 끊겼는지 구분한다. 로그를 열기 전에 원인 범위를 좁히려는 목적이다.
+          if [ "$BUILD_RESULT" = "failure" ]; then
+            FAILED_STAGE="🚨 빌드 / Docker Push 실패 (멀티아키 빌드 확인)"
+          elif [ "$DEPLOY_RESULT" = "failure" ]; then
+            FAILED_STAGE="🚀 EC2 배포 실패 (헬스체크 미통과 또는 deploy.sh 중단)"
+          else
+            FAILED_STAGE="⏹️ 파이프라인 취소됨"
+          fi
+
+          if [ -n "$ROLE_MENTION" ]; then
+            CONTENT="${ROLE_MENTION} 배포 파이프라인 실패! 즉시 확인 바랍니다."
+          else
+            CONTENT="배포 파이프라인 실패! 즉시 확인 바랍니다."
+          fi
+
+          payload=$(jq -n \
+            --arg sha "${COMMIT_SHA:0:7}" \
+            --arg msg "$MSG" \
+            --arg url "$RUN_URL" \
+            --arg curl "$COMMIT_URL" \
+            --arg stage "$FAILED_STAGE" \
+            --arg author "$AUTHOR" \
+            --arg branch "$BRANCH" \
+            --arg content "$CONTENT" \
+            '{
+              content: $content,
+              embeds: [{
+                title: "Lumo Backend 배포 실패",
+                color: 15548997,
+                fields: [
+                  {name: "상태", value: $stage, inline: false},
+                  {name: "브랜치", value: $branch, inline: true},
+                  {name: "작성자", value: $author, inline: true},
+                  {name: "커밋", value: "[\( $sha )](\( $curl ))", inline: true},
+                  {name: "메시지", value: $msg, inline: false},
+                  {name: "Actions 로그", value: "[이동하기](\( $url ))", inline: false}
+                ],
+                footer: {text: "이전 컨테이너는 그대로 살아 있습니다 (deploy.sh set -e)"}
+              }]
+            }')
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
