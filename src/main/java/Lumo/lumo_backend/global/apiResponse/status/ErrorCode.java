@@ -28,7 +28,11 @@ public enum ErrorCode implements BaseErrorCode {
     AUTH_UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "SERVER_4100", "인증 정보가 없습니다."),
     AUTH_TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "SERVER_4101", "토큰이 만료되었습니다."),
     AUTH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "SERVER_4102", "유효하지 않은 토큰입니다."),
-    BLACKLISTED_TOKEN(HttpStatus.UNAUTHORIZED, "SERVER_4103", "블랙리스트에 있는 토큰입니다."),
+    /*
+     * AT 수명을 1시간 → 15분으로 줄이고 RTR 재사용 감지로 대체했기 때문에
+     * "블랙리스트에 있는 토큰" 이라는 상태 자체가 더는 존재X
+     */
+//    BLACKLISTED_TOKEN(HttpStatus.UNAUTHORIZED, "SERVER_4103", "블랙리스트에 있는 토큰입니다."),
     CANNOT_FOUND_RT(HttpStatus.UNAUTHORIZED, "SERVER_4104", "리프레쉬 토큰을 찾을 수 없습니다."),
 
     AUTH_FORBIDDEN(HttpStatus.FORBIDDEN, "SERVER_4300", "접근 권한이 없습니다."),
