@@ -53,13 +53,18 @@ S4 는 S1·S2 로 절대 잡히지 않는다. **정상 상황에서는 개선 �
 
 ### 3. 부하 생성기와 SUT 를 분리할 것
 
-**k6 를 앱과 같은 EC2 에서 돌리지 말 것.** t4g.xlarge 는 4 vCPU 인데 이미
+**k6 를 앱과 같은 EC2 에서 돌리지 말 것.** m7g.xlarge 는 4 vCPU 인데 이미
 Blue + Green + Prometheus + Grafana + Loki + Promtail + Mailpit 이 올라간다.
 여기에 k6 를 얹으면 측정 도구가 측정 대상의 CPU 를 빼앗아 결과가 무의미해진다.
 
 ```bash
-k6 run -e BASE_URL=http://<EC2>:8080 -e MAILPIT_URL=http://<EC2>:8025 ...
+k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.dev:8025 ...
 ```
+
+> **`8080` 이 아니다.** 앱 컨테이너는 `8081`(Blue) / `8082`(Green) 로 published 되고 보안그룹에서
+> 닫혀 있다 — nginx 가 `127.0.0.1` 로 프록시하기 때문이다. 따라서 부하는 nginx 를 경유해야 한다.
+> `origin` 은 **DNS only(회색 구름)** 여야 한다. Cloudflare 프록시를 타면 DDoS 보호·캐싱이 개입해
+> 측정이 오염된다. 보안그룹에 **443 과 8025 를 집 IP 로** 열어둘 것.
 
 로컬에서 EC2 로 쏘는 구성의 주의점:
 
@@ -136,12 +141,23 @@ k6 run -e RUN_ID=s2-$(date +%s) -e RATE=300 -e DURATION=5m k6/stress.js
 
 `mail.worker.count` 를 바꿔가며 S2 를 반복한다.
 
+EC2 에서 워커 수를 바꿔 재기동한 뒤, 로컬에서 k6 를 쏜다.
+
 ```bash
-for W in 3 5 10 15 20 30; do
-  MAIL_WORKER_COUNT=$W  # 앱 재기동 필요
-  k6 run -e RUN_ID=s3-w$W-$(date +%s) -e RATE=300 -e DURATION=1m k6/stress.js
-done
+# [EC2] 워커 수를 바꿔 Blue 재생성
+cd ~/lumo && MAIL_WORKER_COUNT=30 sudo -E docker compose up -d --force-recreate Blue
+docker exec Lumo_Blue printenv MAIL_WORKER_COUNT      # 30 이 찍혀야 한다
 ```
+
+```bash
+# [로컬] 해당 회차 측정
+k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.dev:8025        -e RUN_ID=s3-w30-$(date +%s) -e RATE=300 -e DURATION=1m k6/stress.js
+```
+
+> ⚠️ **`printenv` 확인을 건너뛰지 말 것 (D-6).** 예전에는 `MAIL_WORKER_COUNT` 가
+> compose 의 `environment:` 에 선언돼 있지 않아 **셸에서 주입해도 컨테이너에 도달하지 않았다.**
+> 에러도 경고도 없이 전 회차가 기본값 15 로 돌아, 결과가 비슷하게 나오면 **"포화" 로 오해**하기 딱 좋다.
+> 지금은 선언돼 있지만, 회차마다 실제 반영 여부를 눈으로 확인하는 편이 안전하다.
 
 **Little's Law 로 검증한다.**
 
