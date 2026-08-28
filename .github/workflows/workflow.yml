@@ -121,7 +121,7 @@ jobs:
           username: ${{secrets.EC2_USERNAME}}
           key: ${{secrets.EC2_PRIVATE_KEY}}
           script: |
-            set -e
+            set -eo pipefail
             mkdir -p ~/lumo
             cd ~/lumo
 
