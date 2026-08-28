@@ -23,6 +23,8 @@ import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -112,10 +114,38 @@ public class EmailService {
      * 종료 신호. 루프는 다음 반복에서 조건을 보고 스스로 빠져나온다 (A-5 / G-5).
      * 최대 {@link #BLOCK_TIMEOUT} 만큼 늦게 반응한다.
      */
-    @PreDestroy
-    void shutdown() {
+    /*
+     * ⚠️ @PreDestroy 로는 늦다 (D-4 실측으로 확인, 20260828).
+     *
+     * Spring 의 종료 순서는 다음과 같다.
+     *   ① ContextClosedEvent 발행
+     *   ② LifecycleProcessor.onClose()  → LettuceConnectionFactory 등 SmartLifecycle 빈 정지
+     *   ③ destroyBeans()                → @PreDestroy / DisposableBean
+     *
+     * @PreDestroy 는 ③ 이다. 그런데 같은 ③ 에서 mailWorkerExecutor(DisposableBean) 의
+     * awaitTermination(10초) 이 먼저 걸리면, 워커를 멈출 running=false 가 그 뒤에 줄을 서서
+     * <b>서로를 기다리는 교착</b>이 된다. 게다가 ② 에서 Redis 가 이미 끊긴 뒤라
+     * 워커는 LettuceConnectionFactory has been STOPPED 예외를 1초 간격으로 반복한다.
+     *
+     * 실측(수정 전): "Graceful shutdown complete" 는 찍혔지만
+     *   worker stopped 0건 / "shutdown requested" 로그 없음 / ExitCode 137(SIGKILL)
+     *
+     * ContextClosedEvent 는 ① 이라 Redis 가 살아 있고 executor 파괴도 시작되기 전이다.
+     * 여기서 running=false 를 놓으면 워커가 BLOCK_TIMEOUT(2초) 안에 스스로 빠져나온다.
+     */
+    @EventListener(ContextClosedEvent.class)
+    void onContextClosed() {
         log.info("[EmailService] shutdown requested - stopping mail workers");
         running = false;
+    }
+
+    /** 이벤트 경로가 어떤 이유로 동작하지 않는 경우를 위한 보루. 이미 false 면 아무 일도 하지 않는다. */
+    @PreDestroy
+    void shutdown() {
+        if (running) {
+            log.warn("[EmailService] ContextClosedEvent 를 놓쳤다 - @PreDestroy 에서 중단 신호");
+            running = false;
+        }
     }
 
     /**

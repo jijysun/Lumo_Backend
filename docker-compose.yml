@@ -22,6 +22,11 @@ services:
     networks:
       - my-network
     restart: on-failure
+    # (D-4) 앱의 종료 예산보다 넉넉해야 SIGKILL 이 정리를 자르지 않는다.
+    #   웹 graceful 20s + Executor 최대 25s(mailWorker 10 + mailRecovery 10 + alarm 5) = 최악 45s
+    #   docker compose stop 의 기본값은 10초뿐이라, 그대로 두면 G-5(graceful shutdown)가
+    #   코드상으로만 존재하고 실제로는 매번 강제 종료됐다.
+    stop_grace_period: 60s
 
   Green:
     # Blue 와 동일 — 이미지는 pull 만
@@ -41,6 +46,11 @@ services:
     networks:
       - my-network
     restart: on-failure
+    # (D-4) 앱의 종료 예산보다 넉넉해야 SIGKILL 이 정리를 자르지 않는다.
+    #   웹 graceful 20s + Executor 최대 25s(mailWorker 10 + mailRecovery 10 + alarm 5) = 최악 45s
+    #   docker compose stop 의 기본값은 10초뿐이라, 그대로 두면 G-5(graceful shutdown)가
+    #   코드상으로만 존재하고 실제로는 매번 강제 종료됐다.
+    stop_grace_period: 60s
 
   # ── Redis — 컨테이너 운영 (ElastiCache 대체) ────────────────────────────
   #
