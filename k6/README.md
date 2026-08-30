@@ -66,6 +66,12 @@ k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.d
 > `origin` 은 **DNS only(회색 구름)** 여야 한다. Cloudflare 프록시를 타면 DDoS 보호·캐싱이 개입해
 > 측정이 오염된다. 보안그룹에 **443 과 8025 를 집 IP 로** 열어둘 것.
 
+> ⚠️ **TLS 검증은 꺼진 상태로 돈다.** `origin` 은 Cloudflare 프록시를 우회하므로 nginx 의
+> **Cloudflare Origin CA 인증서를 직접** 제시하는데, 이 CA 는 공개 신뢰 체인에 없다(설계상
+> Cloudflare 엣지만 신뢰). 실측: 검증 ON → `HTTP 000`(핸드셰이크 실패), OFF → 정상.
+> k6 는 커스텀 CA 번들을 지원하지 않아 `insecureSkipTLSVerify` 가 유일한 방법이며
+> 두 스크립트의 `options` 에 기본 활성화돼 있다. 되살리려면 `-e STRICT_TLS=true`.
+
 로컬에서 EC2 로 쏘는 구성의 주의점:
 
 | 항목 | 판정 |
