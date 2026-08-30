@@ -37,6 +37,22 @@ services:
       - LOADTEST_SEED_PASSWORD=${LOADTEST_SEED_PASSWORD:-loadtest1234!}
       # CORS_ALLOWED_ORIGINS 는 워크플로가 .env 에 쓰지 않아 운영에서 localhost 만 허용되고 있었다 (D-7).
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      #
+      # ── 대조군 (이전 버전용) 계측 백포트 ───
+      #
+      # 대조군 커밋(4f38b75 원시 · 8f48f0e List)에는 management.metrics.distribution 이 없어
+      # http_server_requests_seconds_bucket 시계열이 아예 생기지 않는다. 서버측 p95 비교가 불가능하다.
+      # 4f38b75 이전 커밋에는 management.metrics.tags.application 도 없어 Grafana 대시보드가 빈 화면이 된다.
+      #
+      # 대조군 소스를 고치지 않고 설정만 주입한다 — Micrometer 자체는 대조군에도 이미 들어 있고
+      # (auth.filter.duration 이 이미 히스토그램을 쓴다) 스위치만 꺼져 있었을 뿐이다.
+      # SPRING_APPLICATION_JSON 은 application.yaml 보다 우선순위가 높고, JSON 에 등장한 leaf 키만
+      # 기여하므로 개선군의 다른 설정(server.shutdown · SMTP 타임아웃 등)은 건드리지 않는다.
+      #
+      # maximum-expected-value 는 필수다. 이 값이 다르면 le 라벨 집합 자체가 달라지고,
+      # k6/lib/lumo.js 의 quantileFromBuckets() 가 서로 다른 격자 위에서 보간하게 되어
+      # 3점 p95 비교가 무의미해진다. minimum 도 함께 박아 경계를 문서로 고정한다.
+      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true},"minimum-expected-value":{"http.server.requests":"1ms"},"maximum-expected-value":{"http.server.requests":"2s"}}}}}'
     env_file: .env
     networks:
       - my-network
@@ -78,8 +94,24 @@ services:
       - LOADTEST_SEED_USER_COUNT=${LOADTEST_SEED_USER_COUNT:-0}
       - LOADTEST_SEED_EMAIL_DOMAIN=${LOADTEST_SEED_EMAIL_DOMAIN:-loadtest.invalid}
       - LOADTEST_SEED_PASSWORD=${LOADTEST_SEED_PASSWORD:-loadtest1234!}
-      # CORS_ALLOWED_ORIGINS 는 워크플로가 .env 에 쓰지 않아 운영에서 localhost 만 허용되고 있었다 (D-7).
+      # CORS_ALLOWED_ORIGINS 는 워크플로가 .env 에 쓰지 않아 운영에서 localhost 만 허용되고 있었슨.
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      #
+      # ── 대조군 (이전 버전용) 계측 백포트 ───
+      #
+      # 대조군 커밋(4f38b75 원시 · 8f48f0e List)에는 management.metrics.distribution 이 없어
+      # http_server_requests_seconds_bucket 시계열이 아예 생기지 않는다. 서버측 p95 비교가 불가능하다.
+      # 4f38b75 이전 커밋에는 management.metrics.tags.application 도 없어 Grafana 대시보드가 빈 화면이 된다.
+      #
+      # 대조군 소스를 고치지 않고 설정만 주입한다 — Micrometer 자체는 대조군에도 이미 들어 있고
+      # (auth.filter.duration 이 이미 히스토그램을 쓴다) 스위치만 꺼져 있었을 뿐이다.
+      # SPRING_APPLICATION_JSON 은 application.yaml 보다 우선순위가 높고, JSON 에 등장한 leaf 키만
+      # 기여하므로 개선군의 다른 설정(server.shutdown · SMTP 타임아웃 등)은 건드리지 않는다.
+      #
+      # maximum-expected-value 는 필수다. 이 값이 다르면 le 라벨 집합 자체가 달라지고,
+      # k6/lib/lumo.js 의 quantileFromBuckets() 가 서로 다른 격자 위에서 보간하게 되어
+      # 3점 p95 비교가 무의미해진다. minimum 도 함께 박아 경계를 문서로 고정한다.
+      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true},"minimum-expected-value":{"http.server.requests":"1ms"},"maximum-expected-value":{"http.server.requests":"2s"}}}}}'
     env_file: .env
     networks:
       - my-network
