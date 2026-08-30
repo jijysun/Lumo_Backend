@@ -26,7 +26,7 @@
 
 | | 시나리오 | 답하는 질문 | 측정 계층 |
 |---|---|---|---|
-| **S1** | 스파이크 | 급증에도 수락 응답시간이 평탄한가 | 수락 |
+| **S1** | 스파이크 | 급증에도 수락 응답시간이 평탄한가 (**개선 증명이 아니다** — 아래 참조) | 수락 |
 | **S2** | 스트레스 | 배출률 상한은 몇 건/초인가 | 처리 |
 | **S3** | 워커 스윕 | 왜 하필 워커 N개인가 (G-4) | 처리 |
 | **S4** | 카오스 | 유실이 정말 0인가 (Streams 의 존재 이유) | 큐 |
@@ -108,10 +108,64 @@ k6 요약의 `dropped_iterations` 가 0 이 아니면 **로컬 머신이 도착�
 
 ## 실행
 
+로컬 스모크(시나리오 검증용):
+
 ```bash
-# 인프라
 docker compose -f docker-compose-local.yml up -d mysql-local redis-local mailpit
 ```
+
+### EC2 측정 순서 — 파일럿 먼저, 그다음 시나리오별 블록
+
+**0. 파일럿 (C · 개선군)** — 데이터는 버린다. 목적은 **하네스 검증**이다.
+
+```bash
+k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.dev:8025 \
+       -e RUN_ID=pilot-c-$(date +%s) -e RATE=50 -e DURATION=1m -e DRAIN_TIMEOUT=180 k6/stress.js
+```
+
+개선군으로 시작하는 이유 — 이미 배포돼 있고 코드를 가장 잘 알고 있어서, 실패했을 때
+**하네스 문제인지 코드 문제인지 즉시 구분된다.** 원시로 시작하면 그 구분이 안 되고,
+원시는 인스턴스를 죽일 수도 있어 검증되지 않은 하네스로 시도할 이유가 없다.
+
+확인할 것: k6 가 `origin.ddotg.dev` 에 닿는가 · Mailpit API 응답 ·
+`SPRING_APPLICATION_JSON` 반영 · 배출 완료 판정 · 서버측 p95 출력.
+
+**1~4. 본 측정 — 시나리오별로 3점을 연속 실행**
+
+ref 별로 몰지 않고 **시나리오별로 A→B→C 를 붙여서** 돈다. 같은 시간대·같은 인스턴스 상태에서
+3점이 비교되어 회차 간 드리프트가 최소화된다. 전환이 1분이라 가능한 배치다.
+
+| 블록 | 순서 | 시나리오 | 성격 |
+|---|---|---|---|
+| 1 | A → B → C | S1 스파이크 | **문제 발견** (개선 증명이 아니다 — 아래 참조) |
+| 2 | A → B → C | S2 스트레스 | 배출률 상한 |
+| 3 | A → B → C | S4 카오스 | 유실 |
+| 4 | C 전용 | S3 워커 스윕 | Little's Law |
+
+**회차 사이 초기화 (빠뜨리면 다음 회차가 오염된다)**
+
+```bash
+sudo docker compose stop Blue Green                    # 앱을 먼저 멈춘다
+sudo docker exec Lumo_Redis redis-cli FLUSHALL         # List email_queue ↔ Stream mail:stream 잔재
+curl -s -X DELETE http://localhost:8025/api/v1/messages
+sudo docker restart Lumo_Mailpit                       # 인메모리 저장분 회수
+sudo docker compose stop grafana loki promtail         # Prometheus 만 남긴다
+```
+
+앱을 먼저 멈추는 이유 — C 의 워커들이 동시에 NOGROUP 을 만나 그룹 재생성 경합 로그를 쏟는다.
+결과는 정상이지만 진단이 어려워진다.
+
+**회차 전환 직후 확인 (매번)**
+
+```bash
+sudo docker inspect Lumo_Blue --format '{{.Config.Image}}'      # 의도한 SHA
+sudo docker exec Lumo_Blue printenv SPRING_APPLICATION_JSON     # 계측 주입
+sudo docker exec Lumo_Blue printenv SPRING_MAIL_PORT            # 1025
+curl -s localhost:8081/actuator/prometheus | grep -c http_server_requests_seconds_bucket
+sha256sum ~/lumo/docker-compose.yml ~/lumo/scripts/deploy.sh    # 3점 내내 동일해야 한다
+```
+
+마지막 줄이 핵심이다. **해시를 기록하면 "인프라가 상수였다" 를 보고서에서 증명할 수 있다.**
 
 ### S1 — 스파이크 (100/200/400/600 VU 계단)
 
@@ -175,7 +229,8 @@ k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.d
 ```bash
 k6 run -e RUN_ID=s4-$(date +%s) -e RATE=100 -e DURATION=2m k6/stress.js &
 sleep 30
-docker kill Lumo_Blue        # 또는 bootRun 프로세스 강제 종료
+docker kill Lumo_Blue        # ⚠️ 반드시 kill. stop 은 stop_grace_period 60s 가 개입해
+                             #    "정상 종료" 가 되어 장애 주입이 되지 않는다
 sleep 10
 docker start Lumo_Blue
 wait
@@ -188,10 +243,127 @@ wait
 | Mailpit 수신 | k6 200 응답 수보다 **적음** (유실) | k6 200 응답 수 **이상** |
 | 회복 경로 | 없음 | `MailRecoveryScheduler` 가 60초 내 회수 |
 
-대조군 이미지는 Streams 도입 직전 커밋에서 빌드한다.
+## 3점 대조군
+
+비교는 **원시 → Redis List+BRPOP → Redis Streams** 세 점으로 한다.
+
+| 점 | ref | 성격 | S4 기대 결과 |
+|---|---|---|---|
+| **A. 원시** | `4f38b75` | 큐 없음. `SimpleAsyncTaskExecutor`(무제한 스레드) | **전량 유실** |
+| **B. List** | `8f48f0e` | Redis List `email_queue`, `BRPOP`(at-most-once), 워커 15 하드코딩 | 인플라이트 유실 |
+| **C. Streams** | `develop` HEAD | Streams + XACK + PEL 회수 + DLQ | **유실 0** |
+
+> ⛔ **`fa987ec` 를 쓰지 말 것.** 예전 문서가 "Streams 도입 직전 커밋" 으로 지목했으나,
+> 그 커밋의 `MailQueueMetrics.java` 는 `MailStream` 을 import 하는데 그 클래스는
+> **다음 커밋(`4a2f563`)에서 추가된다.** 컴파일 자체가 되지 않아 배포할 수 없다.
+>
+> ⚠️ **`3ff8e02` 가 아니라 `4f38b75`** 를 쓴다. `3ff8e02` 에는
+> `management.metrics.tags.application` 이 없어 Grafana 의 `$application` 변수가 비고
+> **모든 패널이 빈 화면**이 된다. `4f38b75` 는 그 태그만 추가한 다음 커밋이라 원시 구조는 동일하다.
+
+### 대조군 이미지 굽기 (한 번만)
+
+회차마다 CI 로 굽지 않는다. **굽기와 돌리기를 분리**해야 배포 자산이 측정 내내 상수로 유지되고,
+회차 전환이 10분에서 1분으로 줄어든다.
 
 ```bash
-git checkout fa987ec -- .    # 또는 해당 커밋으로 별도 빌드
+git worktree add ../lumo-ctrl-raw  4f38b75
+git worktree add ../lumo-ctrl-list 8f48f0e
+
+docker buildx build --platform linux/arm64 --push \
+  -t jijysun/lumo:$(git rev-parse 4f38b75) ../lumo-ctrl-raw
+docker buildx build --platform linux/arm64 --push \
+  -t jijysun/lumo:$(git rev-parse 8f48f0e) ../lumo-ctrl-list
+```
+
+`Dockerfile` 의 빌더 스테이지가 `--platform=$BUILDPLATFORM` 고정이라 **Gradle 컴파일은 로컬
+네이티브로 돌고** QEMU 는 JRE 레이어에만 쓰인다. arm64 빌드지만 느리지 않다.
+**이 빌드가 곧 컴파일 검증**이므로 별도 확인 단계가 필요 없다.
+
+### 회차 전환 (EC2, 1분)
+
+```bash
+cd ~/lumo
+sudo docker pull jijysun/lumo:<SHA>
+sudo sed -i "s|^LUMO_TAG=.*|LUMO_TAG=<SHA>|" .env
+sudo bash ./scripts/deploy.sh
+```
+
+> ⛔ **측정 기간 중 워크플로 dispatch 금지.** 대조군 ref 로 dispatch 하면 대조군의 낡은
+> `docker-compose.yml` 이 scp 되어 계측 백포트(`SPRING_APPLICATION_JSON`)가 사라진다.
+> 회차 전환은 위 3줄로만 한다.
+
+### ⚠️ S1 은 개선을 증명하지 않는다 — 문제를 드러내는 시나리오다
+
+세 점의 **수락 경로**를 코드로 확인한 결과다.
+
+| ref | 요청 스레드가 하는 일 | Redis 왕복 |
+|---|---|---|
+| A 원시 | `get(email)` → 비동기 제출 (SMTP 는 다른 스레드) | **1회** |
+| B List | `setIfAbsent()` → `leftPush()` | 2회 |
+| C Stream | `setIfAbsent()` → `XADD` | 2회 |
+
+**원시도 SMTP 를 요청 스레드에서 하지 않는다.** 따라서 저부하 S1 의 수락 p95 는
+**원시가 오히려 빠르게 나온다**(Redis 왕복이 1회뿐이라서). "비동기화로 응답시간이 좋아졌다" 는
+서사는 이 3점 대조에서 성립하지 않는다.
+
+실제 차별점은 이쪽이다.
+
+| 축 | 원시 | List | Streams |
+|---|---|---|---|
+| 수락 p95 (저부하) | 가장 빠름 | 중간 | 중간 |
+| **동시성 상한** | **없음** | 15 | 15 (환경변수로 조정) |
+| **고부하 거동** | **스레드 폭증 → 붕괴** | 백프레셔로 적체 | 백프레셔로 적체 |
+| **유실 (S4)** | **전량** | 인플라이트 | **0** |
+| 관측 | `mail.queue.*` 시계열 없음 | depth 만 | depth + pending + dlq + recovery |
+| 운영 조정 | 불가 | 재빌드 필요 | 환경변수 |
+
+→ 결론은 **"응답시간을 희생하지 않으면서(+Redis 1왕복) 동시성 상한·유실·관측·조정 가능성을 얻었다"**
+이지 "빨라졌다" 가 아니다. 트레이드오프를 드러내는 쪽이 근거로 더 강하다.
+
+> 원시(`4f38b75`)의 `mail.queue.depth` 는 "항상 0" 이 아니라 **아예 미등록**이다.
+> `MailQueueMetrics` 의 `@PostConstruct` 가 주석 처리돼 있다. Grafana 에 "No data" 로 뜨는 것이
+> 정상이며, **"원시 구조는 적체를 관측할 대상 자체가 없다"** 가 정확한 서술이다.
+
+### ⛔ 원시(A) 회차는 인스턴스를 죽일 수 있다
+
+`SimpleAsyncTaskExecutor` 는 동시성 제한 없이 **태스크마다 새 플랫폼 스레드**를 만든다.
+게다가 대조군 `application.yaml` 에는 **SMTP 타임아웃이 없다**(무한 대기).
+
+- **낮은 `RATE` 부터 계단으로 올리고** `jvm_threads_live_threads` 를 감시. 임계(3,000) 초과 시 중단
+- 컨테이너 메모리 상한으로 **호스트가 아니라 컨테이너가 죽게** 한다 (3점 모두 동일 적용):
+  ```bash
+  sudo docker update --memory 6g --memory-swap 6g Lumo_Blue
+  ```
+- **붕괴 자체가 결과물이다.** 직전/직후의 로그 · 스레드 그래프 · `RestartCount` 를 캡처할 것
+
+### 계측 백포트 — 대조군에도 서버측 p95 를 뽑는 방법
+
+대조군에는 `management.metrics.distribution` 이 없어 `http_server_requests_seconds_bucket`
+시계열이 **아예 생기지 않는다.** 나머지 메트릭(`mail.send.duration`·`mail.send.result`·
+`auth.filter.duration`)은 대조군에도 있으므로, **유실·배출률·SMTP 소요시간 측정은 전부 가능**하다.
+부족한 것은 서버측 응답시간 백분위 하나뿐이다.
+
+이건 대조군 소스를 고치지 않고 `docker-compose.yml` 의 `SPRING_APPLICATION_JSON` 으로 주입한다.
+Micrometer 자체는 대조군에도 들어 있고 스위치만 꺼져 있었을 뿐이다.
+
+**⚠️ `maximum-expected-value` 는 필수다.** 실측으로 확인했다:
+
+| 설정 | `le` 버킷 수 | 최대 `le` |
+|---|---:|---:|
+| `application.yaml` 만 (max 2s) | 51 | 2.0 |
+| JSON 으로 max 4s 주입 | 57 | 4.0 |
+| JSON 에 실제값 2s 주입 | 51 | 2.0 (yaml 과 `diff` 빈 출력) |
+
+값이 다르면 **`le` 라벨 집합 자체가 달라져** `quantileFromBuckets()` 가 서로 다른 격자 위에서
+보간한다. 3점 p95 비교가 무의미해진다.
+
+**회차마다 격자가 같은지 확인할 것:**
+
+```bash
+curl -s localhost:8081/actuator/prometheus | grep http_server_requests_seconds_bucket \
+  | grep -o 'le="[^"]*"' | sort -u > le_<ref>.txt
+diff le_A.txt le_C.txt     # 반드시 빈 출력
 ```
 
 ## 결과 읽는 법
