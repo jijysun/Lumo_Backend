@@ -47,6 +47,21 @@ fi
 
 echo ">>> ${BEFORE_COLOR} is running! start deploying new ${TARGET_COLOR}"
 
+# ── 로컬 MySQL 프로필 자동 기동 ────────────────────────────────────────────
+# mysql 서비스는 profiles: ["localdb"] 라 명시하지 않으면 뜨지 않는다.
+# RDS 전환 시 compose 를 수정하지 않으려고 Blue/Green 의 depends_on 에도 넣지 않았는데,
+# 그 대가로 EC2 를 새로 만들면 DB 없이 앱만 떠서 Flyway 가 죽는다 (20260828 실제 발생).
+#
+# .env 의 MYSQL_HOST 가 컨테이너 서비스명이면 로컬 DB 구성이므로 여기서 함께 띄운다.
+# RDS 로 전환하면 MYSQL_HOST 가 엔드포인트로 바뀌어 이 블록을 자동으로 건너뛴다.
+if grep -qE '^MYSQL_HOST=mysql[[:space:]]*$' .env 2>/dev/null; then
+        echo ">>> Local MySQL profile detected - bringing it up first"
+        # --wait 로 헬스체크 통과까지 기다린다. 첫 기동은 시스템 테이블 생성 때문에 수십 초가 걸리는데,
+        # 기다리지 않으면 앱이 먼저 떠서 Flyway 가 연결 실패로 죽는다.
+        sudo docker compose --profile localdb up -d --wait --wait-timeout 180 mysql
+        echo ">>> MySQL is healthy"
+fi
+
 sudo docker compose up -d ${TARGET_COLOR}
 
 echo "${TARGET_PORT} -> Try Health Check.."

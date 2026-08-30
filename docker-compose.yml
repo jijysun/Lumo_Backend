@@ -18,10 +18,50 @@ services:
       # 미지정 시 587(현행 동작), 측정 회차에는 SPRING_MAIL_PORT=1025 로 Mailpit 을 가리킨다.
       # 호스트는 .env 의 MAIL_SENDER_HOST 로 계속 제어한다 (측정 시 mailpit).
       - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
+      #
+      # ── (D-6) 측정 회차용 변수 — 여기 선언하지 않으면 컨테이너에 도달하지 않는다 ──────────
+      #
+      # 셸 환경변수는 compose <b>파일의 ${...} 치환</b>에만 쓰이고, 컨테이너 환경으로는
+      # environment: 에 선언된 것 또는 env_file 에 적힌 것만 전달된다.
+      # 즉 아래 선언이 없으면
+      #     MAIL_WORKER_COUNT=30 sudo -E docker compose up -d Blue
+      # 를 해도 컨테이너 안 JVM 은 그 값을 보지 못하고 application.yaml 의 기본값 15 로 뜬다.
+      # 에러도 경고도 없어서, G-4 워커 스윕이 전 회차 15 로 돌면서 "포화" 로 오해되기 쉽다.
+      # (SPRING_MAIL_PORT 만 유일하게 동작하고 있던 이유가 위에 선언돼 있었기 때문이다)
+      #
+      # 확인: docker exec Lumo_Blue printenv MAIL_WORKER_COUNT
+      - MAIL_WORKER_COUNT=${MAIL_WORKER_COUNT:-15}
+      - LOADTEST_SEED_ENABLED=${LOADTEST_SEED_ENABLED:-false}
+      - LOADTEST_SEED_USER_COUNT=${LOADTEST_SEED_USER_COUNT:-0}
+      - LOADTEST_SEED_EMAIL_DOMAIN=${LOADTEST_SEED_EMAIL_DOMAIN:-loadtest.invalid}
+      - LOADTEST_SEED_PASSWORD=${LOADTEST_SEED_PASSWORD:-loadtest1234!}
+      # CORS_ALLOWED_ORIGINS 는 워크플로가 .env 에 쓰지 않아 운영에서 localhost 만 허용되고 있었다 (D-7).
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      #
+      # ── 대조군 (이전 버전용) 계측 백포트 ───
+      #
+      # 대조군 커밋(4f38b75 원시 · 8f48f0e List)에는 management.metrics.distribution 이 없어
+      # http_server_requests_seconds_bucket 시계열이 아예 생기지 않는다. 서버측 p95 비교가 불가능하다.
+      # 4f38b75 이전 커밋에는 management.metrics.tags.application 도 없어 Grafana 대시보드가 빈 화면이 된다.
+      #
+      # 대조군 소스를 고치지 않고 설정만 주입한다 — Micrometer 자체는 대조군에도 이미 들어 있고
+      # (auth.filter.duration 이 이미 히스토그램을 쓴다) 스위치만 꺼져 있었을 뿐이다.
+      # SPRING_APPLICATION_JSON 은 application.yaml 보다 우선순위가 높고, JSON 에 등장한 leaf 키만
+      # 기여하므로 개선군의 다른 설정(server.shutdown · SMTP 타임아웃 등)은 건드리지 않는다.
+      #
+      # maximum-expected-value 는 필수다. 이 값이 다르면 le 라벨 집합 자체가 달라지고,
+      # k6/lib/lumo.js 의 quantileFromBuckets() 가 서로 다른 격자 위에서 보간하게 되어
+      # 3점 p95 비교가 무의미해진다. minimum 도 함께 박아 경계를 문서로 고정한다.
+      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true},"minimum-expected-value":{"http.server.requests":"1ms"},"maximum-expected-value":{"http.server.requests":"2s"}}}}}'
     env_file: .env
     networks:
       - my-network
     restart: on-failure
+    # (D-4) 앱의 종료 예산보다 넉넉해야 SIGKILL 이 정리를 자르지 않는다.
+    #   웹 graceful 20s + Executor 최대 25s(mailWorker 10 + mailRecovery 10 + alarm 5) = 최악 45s
+    #   docker compose stop 의 기본값은 10초뿐이라, 그대로 두면 G-5(graceful shutdown)가
+    #   코드상으로만 존재하고 실제로는 매번 강제 종료됐다.
+    stop_grace_period: 60s
 
   Green:
     # Blue 와 동일 — 이미지는 pull 만
@@ -37,10 +77,50 @@ services:
       # 미지정 시 587(현행 동작), 측정 회차에는 SPRING_MAIL_PORT=1025 로 Mailpit 을 가리킨다.
       # 호스트는 .env 의 MAIL_SENDER_HOST 로 계속 제어한다 (측정 시 mailpit).
       - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
+      #
+      # ── (D-6) 측정 회차용 변수 — 여기 선언하지 않으면 컨테이너에 도달하지 않는다 ──────────
+      #
+      # 셸 환경변수는 compose <b>파일의 ${...} 치환</b>에만 쓰이고, 컨테이너 환경으로는
+      # environment: 에 선언된 것 또는 env_file 에 적힌 것만 전달된다.
+      # 즉 아래 선언이 없으면
+      #     MAIL_WORKER_COUNT=30 sudo -E docker compose up -d Blue
+      # 를 해도 컨테이너 안 JVM 은 그 값을 보지 못하고 application.yaml 의 기본값 15 로 뜬다.
+      # 에러도 경고도 없어서, G-4 워커 스윕이 전 회차 15 로 돌면서 "포화" 로 오해되기 쉽다.
+      # (SPRING_MAIL_PORT 만 유일하게 동작하고 있던 이유가 위에 선언돼 있었기 때문이다)
+      #
+      # 확인: docker exec Lumo_Blue printenv MAIL_WORKER_COUNT
+      - MAIL_WORKER_COUNT=${MAIL_WORKER_COUNT:-15}
+      - LOADTEST_SEED_ENABLED=${LOADTEST_SEED_ENABLED:-false}
+      - LOADTEST_SEED_USER_COUNT=${LOADTEST_SEED_USER_COUNT:-0}
+      - LOADTEST_SEED_EMAIL_DOMAIN=${LOADTEST_SEED_EMAIL_DOMAIN:-loadtest.invalid}
+      - LOADTEST_SEED_PASSWORD=${LOADTEST_SEED_PASSWORD:-loadtest1234!}
+      # CORS_ALLOWED_ORIGINS 는 워크플로가 .env 에 쓰지 않아 운영에서 localhost 만 허용되고 있었슨.
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      #
+      # ── 대조군 (이전 버전용) 계측 백포트 ───
+      #
+      # 대조군 커밋(4f38b75 원시 · 8f48f0e List)에는 management.metrics.distribution 이 없어
+      # http_server_requests_seconds_bucket 시계열이 아예 생기지 않는다. 서버측 p95 비교가 불가능하다.
+      # 4f38b75 이전 커밋에는 management.metrics.tags.application 도 없어 Grafana 대시보드가 빈 화면이 된다.
+      #
+      # 대조군 소스를 고치지 않고 설정만 주입한다 — Micrometer 자체는 대조군에도 이미 들어 있고
+      # (auth.filter.duration 이 이미 히스토그램을 쓴다) 스위치만 꺼져 있었을 뿐이다.
+      # SPRING_APPLICATION_JSON 은 application.yaml 보다 우선순위가 높고, JSON 에 등장한 leaf 키만
+      # 기여하므로 개선군의 다른 설정(server.shutdown · SMTP 타임아웃 등)은 건드리지 않는다.
+      #
+      # maximum-expected-value 는 필수다. 이 값이 다르면 le 라벨 집합 자체가 달라지고,
+      # k6/lib/lumo.js 의 quantileFromBuckets() 가 서로 다른 격자 위에서 보간하게 되어
+      # 3점 p95 비교가 무의미해진다. minimum 도 함께 박아 경계를 문서로 고정한다.
+      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true},"minimum-expected-value":{"http.server.requests":"1ms"},"maximum-expected-value":{"http.server.requests":"2s"}}}}}'
     env_file: .env
     networks:
       - my-network
     restart: on-failure
+    # (D-4) 앱의 종료 예산보다 넉넉해야 SIGKILL 이 정리를 자르지 않는다.
+    #   웹 graceful 20s + Executor 최대 25s(mailWorker 10 + mailRecovery 10 + alarm 5) = 최악 45s
+    #   docker compose stop 의 기본값은 10초뿐이라, 그대로 두면 G-5(graceful shutdown)가
+    #   코드상으로만 존재하고 실제로는 매번 강제 종료됐다.
+    stop_grace_period: 60s
 
   # ── Redis — 컨테이너 운영 (ElastiCache 대체) ────────────────────────────
   #

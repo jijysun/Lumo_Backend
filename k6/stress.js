@@ -38,6 +38,18 @@ export const options = {
      * 기본값 60초로는 배출 대기를 끝내지 못한다 — teardown 이 큐가 비워질 때까지 기다리기 때문이다.
      * DRAIN_TIMEOUT 보다 넉넉해야 "배출 미완료" 를 결과로 볼 수 있다(타임아웃으로 죽으면 아무것도 안 남는다).
      */
+    /*
+     * origin.ddotg.dev 는 Cloudflare Origin CA 인증서를 <b>직접</b> 제시한다.
+     * 이 CA 는 공개 신뢰 체인에 없다 — 설계상 Cloudflare 엣지만 신뢰하는 인증서다.
+     * 실측(20260829): 검증 ON → HTTP 000(핸드셰이크 실패) / 검증 OFF → 502(경로 정상).
+     *
+     * k6 는 커스텀 CA 번들을 지원하지 않으므로 검증을 끄는 것이 유일한 방법이다.
+     * 측정 대상이 본인 소유 오리진이고, Cloudflare 프록시를 <b>일부러 우회</b>하는 것이
+     * 목적(DDoS 보호·캐싱이 개입하면 측정이 오염된다)이므로 수용 가능한 트레이드오프다.
+     *
+     * 검증을 되살리려면 -e STRICT_TLS=true (api.ddotg.dev 처럼 공개 인증서를 쓸 때).
+     */
+    insecureSkipTLSVerify: __ENV.STRICT_TLS !== 'true',
     setupTimeout: '60s',
     teardownTimeout: __ENV.TEARDOWN_TIMEOUT || '20m',
     thresholds: {

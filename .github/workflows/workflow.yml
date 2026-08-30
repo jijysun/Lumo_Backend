@@ -6,6 +6,11 @@
 #   EC2_HOST / EC2_USERNAME / EC2_PRIVATE_KEY
 #   MYSQL_* / MAIL_SENDER_* / REDIS_* / JWT_SECRET_KEY / OPENAI_API_KEY
 #   DISCORD_WEBHOOK_URL : 배포 성공/실패 알림용 웹훅 URL (미설정 시 알림만 조용히 생략)
+#   SPRING_MAIL_PORT    : SMTP 포트. 메일 대상은 호스트·포트가 한 쌍이므로 함께 관리한다.
+#                         측정 회차에는 Mailpit 기준으로 1025, 평상시에는 587.
+#                         ⚠️ 이 값이 빠지면 compose 기본값 587 로 떨어지는데 Mailpit 은 1025 만 연다.
+#                         그러면 MailHealthIndicator 가 DOWN 을 내고 deploy.sh 헬스체크가
+#                         10회 실패해 배포가 통째로 중단된다.
 #
 # 대조군 재현 배포
 #   Actions > 이 워크플로 > Run workflow > ref 에 커밋 SHA 입력 (예: 7a28965)
@@ -121,7 +126,7 @@ jobs:
           username: ${{secrets.EC2_USERNAME}}
           key: ${{secrets.EC2_PRIVATE_KEY}}
           script: |
-            set -e
+            set -eo pipefail
             mkdir -p ~/lumo
             cd ~/lumo
 
@@ -132,6 +137,7 @@ jobs:
             MYSQL_USERNAME=${{secrets.MYSQL_USERNAME}}
             MYSQL_PASSWORD=${{secrets.MYSQL_PASSWORD}}
             MAIL_SENDER_HOST=${{secrets.MAIL_SENDER_HOST}}
+            SPRING_MAIL_PORT=${{secrets.SPRING_MAIL_PORT}}
             MAIL_SENDER_USERNAME=${{secrets.MAIL_SENDER_USERNAME}}
             MAIL_SENDER_PASSWORD=${{secrets.MAIL_SENDER_PASSWORD}}
             REDIS_HOST=${{secrets.REDIS_HOST}}
