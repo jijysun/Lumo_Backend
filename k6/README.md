@@ -411,9 +411,23 @@ sudo bash ./scripts/deploy.sh
 ### 계측 백포트 — 대조군에도 서버측 p95 를 뽑는 방법
 
 대조군에는 `management.metrics.distribution` 이 없어 `http_server_requests_seconds_bucket`
-시계열이 **아예 생기지 않는다.** 나머지 메트릭(`mail.send.duration`·`mail.send.result`·
-`auth.filter.duration`)은 대조군에도 있으므로, **유실·배출률·SMTP 소요시간 측정은 전부 가능**하다.
-부족한 것은 서버측 응답시간 백분위 하나뿐이다.
+시계열이 **아예 생기지 않는다.** `mail.send.result` 같은 카운터와 `mail.send.duration` 의
+**합계·건수·최대값**은 대조군에도 있으므로 **유실·배출률·평균 소요시간 측정은 그대로 가능**하다.
+부족한 것은 **백분위 두 가지**다.
+
+| 타이머 | 대조군 상태 | 백포트 후 |
+|---|---|---|
+| `http.server.requests` | `_bucket` 없음 → **수락 p95 불가** | ✅ 1ms\~2s 격자 |
+| `mail.send.duration` | `TYPE summary` (`_count`·`_sum`·`_max` 만) → **배출 p95 불가** | ✅ 1ms\~10s 격자 |
+
+`mail.send.duration` 은 세 버전 모두 `Timer.builder("mail.send.duration")` 로 **같은 이름에
+등록돼 있다**(확인 완료). 히스토그램 스위치만 꺼져 있어 평균으로만 볼 수 있었는데,
+**배출 지연의 꼬리는 평균에 안 나타난다** — 워커가 몇 건에서 오래 물렸는지가 p95 에서 드러난다.
+
+상한을 `10s` 로 둔 근거는 `application.yaml` 의 JavaMail read timeout 이 10s 라는 것이다.
+그 지점까지 격자 안에 들어와야 꼬리가 `+Inf` 한 칸으로 뭉개지지 않는다.
+(원시 대조군에는 SMTP 타임아웃 설정이 아예 없어 더 길어질 수 있으나, 그때는 `+Inf` 로
+몰리는 것 자체가 결과다)
 
 이건 대조군 소스를 고치지 않고 `docker-compose.yml` 의 `SPRING_APPLICATION_JSON` 으로 주입한다.
 Micrometer 자체는 대조군에도 들어 있고 스위치만 꺼져 있었을 뿐이다.
@@ -432,10 +446,24 @@ Micrometer 자체는 대조군에도 들어 있고 스위치만 꺼져 있었을
 **회차마다 격자가 같은지 확인할 것:**
 
 ```bash
-curl -s localhost:8081/actuator/prometheus | grep http_server_requests_seconds_bucket \
-  | grep -o 'le="[^"]*"' | sort -u > le_<ref>.txt
-diff le_A.txt le_C.txt     # 반드시 빈 출력
+P=8081   # 활성 색상에 맞출 것
+
+# 두 타이머 모두 버킷이 생겼는지 (0 이면 측정 금지)
+curl -s localhost:$P/actuator/prometheus | grep -c http_server_requests_seconds_bucket
+curl -s localhost:$P/actuator/prometheus | grep -c mail_send_duration_seconds_bucket
+
+# le 격자 채취 — 회차마다 남긴다
+curl -s localhost:$P/actuator/prometheus | grep http_server_requests_seconds_bucket \
+  | grep -o 'le="[^"]*"' | sort -u > le_http_<ref>.txt
+curl -s localhost:$P/actuator/prometheus | grep mail_send_duration_seconds_bucket \
+  | grep -o 'le="[^"]*"' | sort -u > le_mail_<ref>.txt
+
+diff le_http_A.txt le_http_C.txt     # 반드시 빈 출력
+diff le_mail_A.txt le_mail_C.txt     # 반드시 빈 출력
 ```
+
+> ⚠️ `mail_send_duration_seconds_bucket` 이 **0 인데 회차를 돌리면**, 그 회차만 배출 p95 가
+> 빠져 3점 비교표에 구멍이 난다. 해당 회차는 다시 돌려야 하므로 **전환 직후 반드시 확인**한다.
 
 ## 결과 읽는 법
 

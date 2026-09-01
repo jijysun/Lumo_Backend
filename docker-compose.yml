@@ -52,7 +52,16 @@ services:
       # maximum-expected-value 는 필수다. 이 값이 다르면 le 라벨 집합 자체가 달라지고,
       # k6/lib/lumo.js 의 quantileFromBuckets() 가 서로 다른 격자 위에서 보간하게 되어
       # 3점 p95 비교가 무의미해진다. minimum 도 함께 박아 경계를 문서로 고정한다.
-      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true},"minimum-expected-value":{"http.server.requests":"1ms"},"maximum-expected-value":{"http.server.requests":"2s"}}}}}'
+      #
+      # mail.send.duration 도 함께 켠다(20260901). 이 타이머는 세 버전 모두 같은 이름으로
+      # 등록돼 있으나 히스토그램이 꺼져 있어 TYPE summary 로만 노출됐다 — 평균(sum/count)과
+      # max 는 나오지만 p95 를 뽑을 수 없었다. 배출 지연의 꼬리는 평균으로 안 보인다.
+      #
+      # 상한 10s 의 근거: application.yaml 의 JavaMail read timeout 이 10s 다. 그 지점까지
+      # 격자 안에 들어와야 지연 꼬리가 +Inf 한 칸으로 뭉개지지 않는다.
+      # (원시 대조군에는 SMTP 타임아웃 설정이 아예 없어 더 길어질 수 있으나,
+      #  그 경우는 +Inf 로 몰리는 것 자체가 결과다)
+      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true,"mail.send.duration":true},"minimum-expected-value":{"http.server.requests":"1ms","mail.send.duration":"1ms"},"maximum-expected-value":{"http.server.requests":"2s","mail.send.duration":"10s"}}}}}'
     env_file: .env
     networks:
       - my-network
@@ -111,7 +120,16 @@ services:
       # maximum-expected-value 는 필수다. 이 값이 다르면 le 라벨 집합 자체가 달라지고,
       # k6/lib/lumo.js 의 quantileFromBuckets() 가 서로 다른 격자 위에서 보간하게 되어
       # 3점 p95 비교가 무의미해진다. minimum 도 함께 박아 경계를 문서로 고정한다.
-      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true},"minimum-expected-value":{"http.server.requests":"1ms"},"maximum-expected-value":{"http.server.requests":"2s"}}}}}'
+      #
+      # mail.send.duration 도 함께 켠다(20260901). 이 타이머는 세 버전 모두 같은 이름으로
+      # 등록돼 있으나 히스토그램이 꺼져 있어 TYPE summary 로만 노출됐다 — 평균(sum/count)과
+      # max 는 나오지만 p95 를 뽑을 수 없었다. 배출 지연의 꼬리는 평균으로 안 보인다.
+      #
+      # 상한 10s 의 근거: application.yaml 의 JavaMail read timeout 이 10s 다. 그 지점까지
+      # 격자 안에 들어와야 지연 꼬리가 +Inf 한 칸으로 뭉개지지 않는다.
+      # (원시 대조군에는 SMTP 타임아웃 설정이 아예 없어 더 길어질 수 있으나,
+      #  그 경우는 +Inf 로 몰리는 것 자체가 결과다)
+      - 'SPRING_APPLICATION_JSON={"management":{"metrics":{"tags":{"application":"lumo-backend"},"distribution":{"percentiles-histogram":{"http.server.requests":true,"mail.send.duration":true},"minimum-expected-value":{"http.server.requests":"1ms","mail.send.duration":"1ms"},"maximum-expected-value":{"http.server.requests":"2s","mail.send.duration":"10s"}}}}}'
     env_file: .env
     networks:
       - my-network
