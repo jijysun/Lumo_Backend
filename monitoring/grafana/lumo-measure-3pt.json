@@ -35,7 +35,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "### 읽는 법 — 3점 대조군 (A 원시 · B List+BRPOP · C Streams)\n\n| 섹션 | A `4f38b75` | B `8f48f0e` | C `develop` |\n|---|---|---|---|\n| **① 공통 비교축** | ✅ | ✅ | ✅ |\n| **② B·C 만** | ❌ No data 가 **정상** | ✅ | ✅ |\n| **③ C 전용** | ❌ | ❌ | ✅ |\n\n**⚠️ A 회차 오독 주의** — A 의 메일은 `rawMailExecutor`(`SimpleAsyncTaskExecutor`)로 나가며 이 타입은 풀이 없어 `executor_*` 가 생성되지 않는다. 그런데 A 의 `AsyncConfig` 에는 **쓰이지 않는** `mailExecutor` 빈이 함께 정의돼 있어 ②의 워커 풀 패널에 **0 으로 평평한 선**이 그려진다. 이것을 \"A 도 풀이 있는데 놀고 있다\"로 읽으면 안 된다 — 실제로는 무제한 스레드로 나가고 있다. **A 회차의 동시성은 `라이브 스레드` 패널 하나로만 판단할 것.**\n\n**⚠️ 회차 전환 시** `$instance` 를 확인할 것 — Blue(8081) ↔ Green(8082) 가 전환 직후 잠시 겹친다.",
+        "content": "### 읽는 법 — 3점 대조군 (A 원시 · B List+BRPOP · C Streams)\n\n| 섹션 | A `4f38b75` | B `8f48f0e` | C `develop` |\n|---|---|---|---|\n| **① 공통 비교축** | ✅ | ✅ | ✅ |\n| **② 큐 적체** | ❌ No data (큐 자체가 없다) | ✅ | ✅ |\n| **② 워커 풀** | ⚠️ **0 으로 나온다** — No data 아님 | ✅ | ✅ |\n| **② 스케줄러 풀** | ✅ pool **1** | ✅ pool **1** | ✅ pool **4** |\n| **③ C 전용** | ❌ | ❌ | ✅ |\n\n**⚠️ A 회차 오독 주의** — A 의 메일은 `rawMailExecutor`(`SimpleAsyncTaskExecutor`)로 나가며 이 타입은 풀이 없어 `executor_*` 가 생성되지 않는다. 그런데 A 의 `AsyncConfig` 에는 **쓰이지 않는** `mailExecutor` 빈이 함께 정의돼 있어 ②의 워커 풀 패널에 **0 으로 평평한 선**이 그려진다. 이것을 \"A 도 풀이 있는데 놀고 있다\"로 읽으면 안 된다 — 실제로는 무제한 스레드로 나가고 있다. **A 회차의 동시성은 `라이브 스레드` 패널 하나로만 판단할 것.**\n\n계측 **등록은 기동 시점**, 스레드 **생성은 첫 submit 시점**으로 서로 별개다. `TaskExecutorMetricsAutoConfiguration` 이 `Map<String, Executor>` 를 훑어 런타임 타입이 `ThreadPoolTaskExecutor` 인 빈을 **주입처가 없어도** 전부 계측하므로 시계열은 t=0 부터 존재하고, `ThreadPoolExecutor` 는 코어 스레드를 미리 만들지 않으므로 값이 0 이다. **No data 와 0 은 다르다.**\n\n더 나쁜 것은 **A 와 B 의 `mailExecutor` 빈 정의가 `core=15 · max=50 · queue=100` 으로 완전히 동일**하다는 점이다. `pool_core`·`pool_max` 로는 두 회차가 구분되지 않는다 — 구별되는 것은 `pool`(A=0, B=15) 과 `active` 뿐이다.\n\n**⚠️ 회차 전환 시** `$instance` 를 확인할 것 — Blue(8081) ↔ Green(8082) 가 전환 직후 잠시 겹친다.",
         "mode": "markdown"
       },
       "pluginVersion": "11.0.0",
@@ -1563,7 +1563,7 @@
       },
       "id": 18,
       "panels": [],
-      "title": "② B · C 만 — A 원시(4f38b75)는 No data 가 정상이다",
+      "title": "② 풀 · 큐 계측 — ⚠ A 원시도 값이 나온다 · No data 가 아니다 (미사용 mailExecutor 빈)",
       "type": "row"
     },
     {
@@ -1669,7 +1669,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "C1·C2·C3. 빈 이름이 회차마다 다르다 — B=mailExecutor, C=mailWorkerExecutor. 정규식에 둘 다 넣어야 한다.\n\n⚠️ A 회차 오독 주의: A 의 메일은 rawMailExecutor(SimpleAsyncTaskExecutor)로 나가며 이 타입은 풀이 없어 executor_* 가 생성되지 않는다. 그런데 A 의 AsyncConfig 에는 쓰이지 않는 mailExecutor 빈이 함께 정의돼 있어 0 으로 평평한 선이 그려진다. 이것을 \"A 도 풀이 있다\" 로 읽으면 안 된다.\n\n⚠️ mailWorkerExecutor 의 active 는 항상 15(=pool) 다. 워커가 while(running) 무한 루프라 정상값이며 포화도로 해석하지 말 것.",
+      "description": "C1·C2·C3. 빈 이름이 회차마다 다르다 — B=mailExecutor, C=mailWorkerExecutor. 정규식에 둘 다 넣어야 한다.\n\n⚠️ A 회차 오독 주의: A 의 메일은 rawMailExecutor(SimpleAsyncTaskExecutor)로 나가며 이 타입은 풀이 없어 executor_* 가 생성되지 않는다. 그런데 A 의 AsyncConfig 에는 쓰이지 않는 mailExecutor 빈이 함께 정의돼 있어 0 으로 평평한 선이 그려진다. 이것을 \"A 도 풀이 있다\" 로 읽으면 안 된다.\n\n계측 등록은 기동 시점이고 스레드 생성은 첫 submit 시점이다 — 둘은 별개다. TaskExecutorMetricsAutoConfiguration 이 Map<String, Executor> 를 훑어 런타임 타입이 ThreadPoolTaskExecutor 인 빈을 전부 bindTo 하므로, 주입받는 곳이 없어도 시계열은 t=0 부터 존재한다. 반면 ThreadPoolExecutor 는 코어 스레드를 미리 만들지 않으므로 pool=active=queued=0 이다. 즉 No data 가 아니라 0 이며 Grafana 에서 이 둘은 다르게 그려진다.\n\n⚠️ A 와 B 의 mailExecutor 빈 정의는 core=15 · max=50 · queue=100 으로 완전히 동일하다. 따라서 pool_core / pool_max 로는 두 회차가 구분되지 않는다. 구별되는 것은 pool(A=0, B=15) 과 active 뿐이다.\n\n⚠️ mailWorkerExecutor 의 active 는 항상 15(=pool) 다. 워커가 while(running) 무한 루프라 정상값이며 포화도로 해석하지 말 것.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1797,7 +1797,151 @@
           "refId": "C"
         }
       ],
-      "title": "워커 풀 — mailExecutor(B) · mailWorkerExecutor(C)",
+      "title": "워커 풀 — A·B mailExecutor · C mailWorkerExecutor + mailRecoveryExecutor",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "C4·C5. @Scheduled 전용 풀. @Async 의 TaskExecutor 와 완전히 별개의 인프라이며 세 회차 모두 값이 나온다 — A·B 는 Spring Boot 기본값 1, C 는 spring.task.scheduling.pool.size=4 다.\n\nC 회차의 헤드라인 결과인 유실 0 은 MailRecoveryScheduler 가 이 풀에서 돌아 PEL 을 XCLAIM 회수하는 데 전적으로 의존한다. 이 풀이 막히면 회수가 멈추고 PEL 이 쌓인 채 회차가 끝나 유실 0 주장이 무너진다. H-10 이 정확히 그 사고였다: 회수분 SMTP 발송을 스케줄러 스레드에서 직접 호출해 풀 하나를 통째로 점유했다.\n\n판정: active 가 pool 에 붙어 지속되면 포화다. 완료율(오른쪽 축)이 0 으로 평평해지면 스케줄러가 아예 진행하지 못하고 있다는 뜻이다 — MailRecoveryScheduler 는 fixedDelay 30s 라 이 값이 최소 0.03/s 는 나와야 한다.\n\n⚠️ executor_queued_tasks 를 일부러 뺐다. 스케줄러의 큐는 DelayedWorkQueue 이고 아직 실행 시각이 안 된 주기 작업이 상주하므로, 그 값은 적체가 아니라 등록된 @Scheduled 개수에 가까운 상수다. 백로그 지표로 읽으면 오독한다.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*완료율.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "linear"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 15
+              },
+              {
+                "id": "unit",
+                "value": "ops"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "id": 25,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (name) (executor_pool_size_threads{application=\"$application\", instance=~\"$instance\", name=\"taskScheduler\"})",
+          "legendFormat": "{{name}} · pool",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (name) (executor_active_threads{application=\"$application\", instance=~\"$instance\", name=\"taskScheduler\"})",
+          "legendFormat": "{{name}} · active",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (name) (rate(executor_completed_tasks_total{application=\"$application\", instance=~\"$instance\", name=\"taskScheduler\"}[1m]))",
+          "legendFormat": "{{name}} · 완료율",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "★ 스케줄러 풀 — taskScheduler (A·B 기본 1 / C 4) · H-10 회귀 감시",
       "type": "timeseries"
     },
     {
@@ -1806,7 +1950,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 62
       },
       "id": 21,
       "panels": [],
@@ -1876,7 +2020,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 54
+        "y": 63
       },
       "id": 22,
       "options": {
@@ -1990,7 +2134,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 54
+        "y": 63
       },
       "id": 23,
       "options": {
@@ -2104,7 +2248,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 54
+        "y": 63
       },
       "id": 24,
       "options": {
