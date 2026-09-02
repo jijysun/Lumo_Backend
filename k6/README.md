@@ -114,6 +114,34 @@ k6 요약의 `dropped_iterations` 가 0 이 아니면 **로컬 머신이 도착�
 
 ## 실행
 
+### ⛔ 셸을 먼저 고를 것 — PowerShell 에서는 `RUN_ID` 가 조용히 잘린다
+
+이 문서의 명령은 전부 `$(date +%s)` 를 쓴다. **Git Bash 를 권장한다** — 그대로 동작한다.
+
+PowerShell 은 `$(date +%s)` 를 `Get-Date -Date "+%s"` 로 해석해 **실패하고, 접두사만 남긴다.**
+에러는 뜨지만 k6 는 그대로 실행되므로 놓치기 쉽다. 실제로 20260902 파일럿에서 `RUN_ID=pilot-c-`
+로 돌았다.
+
+```powershell
+# PowerShell 대체 문법
+-e RUN_ID=pilot-c-$([int](Get-Date -UFormat %s))
+```
+
+`RUN_ID` 를 **아예 생략해도 된다** — `lib/lumo.js` 가 `__ENV.RUN_ID || String(Date.now())` 로
+자동 부여한다. 다만 회차 식별이 안 되므로 접두사를 주는 편이 낫다.
+
+**기동 로그에서 반드시 눈으로 확인한다.**
+
+```
+INFO[0000] [stress] RUN_ID=pilot-c-1756789012 rate=50/s duration=1m
+                              ^^^^^^^^^^ 숫자가 붙어 있어야 한다
+```
+
+`-` 로 끝나면 즉시 중단할 것. 다음 회차에서 **같은 주소가 재생성**되어
+`mail_rejected_duplicate: count==0` 임계에 걸리고 **회차가 통째로 무효**가 된다.
+
+---
+
 로컬 스모크(시나리오 검증용):
 
 ```bash
@@ -125,8 +153,14 @@ docker compose -f docker-compose-local.yml up -d mysql-local redis-local mailpit
 **0. 파일럿 (C · 개선군)** — 데이터는 버린다. 목적은 **하네스 검증**이다.
 
 ```bash
+# Git Bash — 이 문서의 나머지 명령도 전부 이 형태다
 k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.dev:8025 \
        -e RUN_ID=pilot-c-$(date +%s) -e RATE=50 -e DURATION=1m -e DRAIN_TIMEOUT=180 k6/stress.js
+```
+
+```powershell
+# PowerShell — 이하 모든 명령에서 $(date +%s) 를 아래 형태로 바꿔 쓴다
+k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.dev:8025 -e RUN_ID=pilot-c-$([int](Get-Date -UFormat %s)) -e RATE=50 -e DURATION=1m -e DRAIN_TIMEOUT=180 k6/stress.js
 ```
 
 개선군으로 시작하는 이유 — 이미 배포돼 있고 코드를 가장 잘 알고 있어서, 실패했을 때
@@ -150,8 +184,22 @@ ref 별로 몰지 않고 **시나리오별로 A→B→C 를 붙여서** 돈다. 
 
 ### 회차별 권장 파라미터
 
-배출률은 **워커 수 / 건당 소요시간**이다. 로컬 실측(15워커 · 294ms)이 51건/초였으므로 아래 표는
-그 값을 기준으로 잡았다 — EC2 회차에서 실측치가 나오면 다시 계산할 것.
+배출률은 **워커 수 / 건당 소요시간**이다.
+
+> ⛔ **아래 표의 부하 값은 낡았다 (20260902).**
+>
+> 이 표는 로컬 Docker Desktop 실측(15워커 · 건당 294ms → **51건/초**)을 기준으로 잡았다.
+> 그런데 **EC2 실측은 건당 5.11ms** 로 약 57배 빠르다 — 로컬이 느렸던 것은 Docker Desktop 의
+> WSL2/vpnkit 네트워크 스택 때문이고, EC2 는 네이티브 docker bridge 다.
+>
+> Little's Law 상한: `15워커 ÷ 5.11ms ≈ 2,900건/초` (SMTP 구간) · Redis 왕복 3회 포함 **≈ 2,500건/초**.
+> 파일럿 CPU 평균 2.86%@50/s 를 외삽해도 포화가 1,500~2,000/s 부근이라 두 추정이 일치한다.
+>
+> 따라서 아래 `RATE=100` · `300` 은 **상한의 4~12%** 라 **적체가 생기지 않는다** —
+> S2(배출률 상한) · S3(Little's Law) 가 빈 결과를 낸다. 실제로 파일럿은
+> `워커 처리량 상한: 측정 불가` 를 냈고 VU 를 3개만 썼다.
+>
+> **본 측정 전에 아래 「배출 상한 캘리브레이션」 절을 먼저 돌려 값을 다시 잡을 것.**
 
 | 시나리오 | 부하 | 지속 | `DRAIN_TIMEOUT` | 총 요청 | 부하 후 배출 |
 |---|---|---|---|---:|---|
@@ -314,6 +362,63 @@ wait
 | Mailpit 수신 | k6 200 응답 수보다 **적음** (유실) | k6 200 응답 수 **이상** |
 | 회복 경로 | 없음 | `MailRecoveryScheduler` 가 60초 내 회수 |
 
+## 배출 상한 캘리브레이션 — 본 측정 전에 한 번
+
+파일럿이 `워커 처리량 상한: 측정 불가` 를 냈다. `RATE=50` 이 배출률보다 한참 낮아 적체가 아예
+생기지 않았기 때문이다. **상한을 모르면 S2·S3 파라미터를 정할 수 없다.**
+
+### 원리
+
+```
+적체 = (도착률 − 배출률) × 지속시간
+```
+
+`stress.js` 는 `constant-arrival-rate`(open model)라 **서버가 느려져도 도착률을 유지**한다.
+VU 기반(closed model)은 서버가 느려지면 VU 가 응답을 기다리느라 요청률이 함께 떨어져
+(coordinated omission) 상한이 영원히 보이지 않는다. 그래서 «들어오는 양 > 나가는 양» 을
+강제로 만들 수 있는 것은 도착률 고정 방식뿐이다.
+
+상한이 미지수이므로 도착률을 계단으로 올려 **`★ 실질 백로그 (파생)` 패널이 처음 0 을
+벗어나는 지점**을 찾는다. 그 지점이 배출률 상한이다.
+
+### 실행
+
+```bash
+K6="k6 run -e BASE_URL=https://origin.ddotg.dev -e MAILPIT_URL=http://origin.ddotg.dev:8025"
+V="-e PRE_VUS=200 -e MAX_VUS=2000"
+
+$K6 $V -e RUN_ID=cal-c-500-$(date +%s)  -e RATE=500  -e DURATION=1m -e DRAIN_TIMEOUT=180 k6/stress.js
+$K6 $V -e RUN_ID=cal-c-1000-$(date +%s) -e RATE=1000 -e DURATION=1m -e DRAIN_TIMEOUT=300 k6/stress.js
+$K6 $V -e RUN_ID=cal-c-2000-$(date +%s) -e RATE=2000 -e DURATION=1m -e DRAIN_TIMEOUT=600 k6/stress.js
+```
+
+> ⛔ **`PRE_VUS` · `MAX_VUS` 를 반드시 명시한다.**
+> `stress.js` 의 기본값은 `preAllocatedVUs = max(50, RATE)` · `maxVUs = RATE × 10` 이다.
+> `RATE=2000` 이면 **VU 2,000개를 선할당하고 상한이 20,000** 이 된다.
+> 실제 필요량은 `RATE × 지연(≈10ms)` = **20개** 수준이므로, 그대로 두면
+> 측정 대상이 아니라 **부하 생성기(노트북)가 먼저 죽는다.**
+
+`DURATION` 은 60초 미만 금지 — Prometheus 5초 스크랩으로 `rate()[1m]` 창을 채워야 하고
+JVM 이 C2 까지 워밍업할 시간도 필요하다.
+
+### 고부하에서 새로 생기는 한계 3가지
+
+| 항목 | 내용 |
+|---|---|
+| **Mailpit 저장량** | `RATE=2000 × 60s = 120,000통`. 회차마다 `DELETE /api/v1/messages` + 컨테이너 재시작으로 반드시 비운다 |
+| **부하 생성기 대역폭** | 파일럿 실측 응답 ≈1.4KB/건 → 2,000/s 면 **≈22Mbps 수신**. 회선이 못 받치면 그 회차는 무효 |
+| **`dropped_iterations`** | 0 이 아니면 k6 가 도착률을 못 지킨 것이다. 그 회차는 폐기 |
+
+### 분기 — 적체가 끝내 안 생기면
+
+`dropped_iterations` 나 수락 p95 가 **먼저** 무너지면 병목은 워커가 아니라 **수락 계층·네트워크**다.
+그때는 부하를 더 올리지 말고 **`MAIL_WORKER_COUNT` 를 1~3 으로 낮춰 상한을 끌어내린다.**
+
+규칙(«C 의 S2 는 워커 15»)은 그대로 유지하고 **S3 스윕에서만** 적용할 것 —
+S2 는 B 의 하드코딩 15 와 맞춰야 «큐 구조»만의 비교가 되기 때문이다.
+
+---
+
 ## 3점 대조군
 
 비교는 **원시 → Redis List+BRPOP → Redis Streams** 세 점으로 한다.
@@ -363,6 +468,24 @@ sudo bash ./scripts/deploy.sh
 > ⛔ **측정 기간 중 워크플로 dispatch 금지.** 대조군 ref 로 dispatch 하면 대조군의 낡은
 > `docker-compose.yml` 이 scp 되어 계측 백포트(`SPRING_APPLICATION_JSON`)가 사라진다.
 > 회차 전환은 위 3줄로만 한다.
+
+**전환 직후 확인 목록** (하나라도 어긋나면 그 회차는 돌리지 말 것)
+
+```bash
+C=Lumo_Green; P=8082                                             # 활성 색상에 맞출 것
+sudo docker inspect $C --format '{{.Config.Image}}'              # 의도한 SHA
+sudo docker inspect $C --format '{{.State.ExitCode}}'            # 직전 컨테이너: 137 이면 SIGKILL (D-19)
+sudo docker exec $C printenv SPRING_APPLICATION_JSON             # 계측 주입 (두 타이머 모두)
+sudo docker exec $C printenv MAIL_SENDER_HOST                    # mailpit ← 실 SMTP 면 즉시 중단
+curl -s localhost:$P/actuator/prometheus | grep -c mail_send_duration_seconds_bucket   # > 0
+sha256sum ~/lumo/docker-compose.yml ~/lumo/scripts/deploy.sh     # 3점 내내 동일해야 한다
+```
+
+> `sha256sum` 은 **EC2 에서만** 대조할 것. Windows 로컬 체크아웃은 `core.autocrlf=true` 라
+> CRLF 가 되어 절대 일치하지 않는다. 로컬에서 보려면 `tr -d '\r' < docker-compose.yml | sha256sum`.
+
+그리고 k6 를 쏘기 직전, **기동 로그의 `RUN_ID` 에 숫자가 붙었는지 눈으로 본다**
+(위 「셸을 먼저 고를 것」 참조). `-` 로 끝나면 중단 — 다음 회차가 통째로 무효가 된다.
 
 ### ⚠️ S1 은 개선을 증명하지 않는다 — 문제를 드러내는 시나리오다
 
@@ -485,6 +608,27 @@ mail_accepted (k6 가 200 받은 수)  <=  Mailpit 수신
 ```
 
 at-least-once 이므로 **재시도로 인한 중복은 허용**된다. 반대로 Mailpit 수신이 더 적으면 유실이다.
+
+### 적체는 Grafana 의 `★ 실질 백로그 (파생)` 로만 본다
+
+teardown 의 `미확인(XPENDING)` 은 적체가 아니다 — 워커가 `count(1)` 로 1건씩 읽으므로
+**워커 수(기본 15)가 상한**이다. 수천 건이 밀려 있어도 이 값은 15 를 못 넘는다.
+`XCLAIM` 은 기존 PEL 항목의 소유자만 바꿀 뿐 새 항목을 만들지 않으므로 회수도 상한을 올리지 않는다.
+
+대시보드의 `mail_queue_depth` 도 적체가 아니다 — **회차마다 재는 대상이 다르다.**
+
+| ref | 재는 것 | 부하 후 |
+|---|---|---|
+| A 원시 | 쓰지 않는 `email_queue` 의 `LLEN`. 없는 키라 **항상 0** | 0 |
+| B List | 진짜 대기열 | **0 으로 복귀** |
+| C Stream | `XLEN` 누적. `XACK` 해도 줄지 않는다 | **`MAX_LEN`(10,000)까지 남음** |
+
+C 를 그대로 B 옆에 놓으면 **적체가 0 인데도 개선군이 더 나빠 보인다.**
+20260902 파일럿이 그 사례다 — PEL 0 · 잔여 배출량 0 · Mailpit 3,000 수신으로 적체가 없었는데
+`mail_queue_depth` 는 3,000 에서 끝까지 평평했다.
+
+진짜 백로그인 `XINFO GROUPS` 의 `lag`(Redis 7.0+)는 **현재 미계측**이다.
+그래서 3점 비교는 두 카운터의 차(수락 − 배출)로 만든 파생 지표를 쓴다.
 
 ## 로컬 스모크 실측 (2026-08-24, Docker Desktop / Windows)
 
