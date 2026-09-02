@@ -35,7 +35,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "### 읽는 법 — 3점 대조군 (A 원시 · B List+BRPOP · C Streams)\n\n| 섹션 | A `4f38b75` | B `8f48f0e` | C `develop` |\n|---|---|---|---|\n| **① 공통 비교축** | ✅ | ✅ | ✅ |\n| **② 큐 적체** | ❌ No data (큐 자체가 없다) | ✅ | ✅ |\n| **② 워커 풀** | ⚠️ **0 으로 나온다** — No data 아님 | ✅ | ✅ |\n| **② 스케줄러 풀** | ✅ pool **1** | ✅ pool **1** | ✅ pool **4** |\n| **③ C 전용** | ❌ | ❌ | ✅ |\n\n**⚠️ A 회차 오독 주의** — A 의 메일은 `rawMailExecutor`(`SimpleAsyncTaskExecutor`)로 나가며 이 타입은 풀이 없어 `executor_*` 가 생성되지 않는다. 그런데 A 의 `AsyncConfig` 에는 **쓰이지 않는** `mailExecutor` 빈이 함께 정의돼 있어 ②의 워커 풀 패널에 **0 으로 평평한 선**이 그려진다. 이것을 \"A 도 풀이 있는데 놀고 있다\"로 읽으면 안 된다 — 실제로는 무제한 스레드로 나가고 있다. **A 회차의 동시성은 `라이브 스레드` 패널 하나로만 판단할 것.**\n\n계측 **등록은 기동 시점**, 스레드 **생성은 첫 submit 시점**으로 서로 별개다. `TaskExecutorMetricsAutoConfiguration` 이 `Map<String, Executor>` 를 훑어 런타임 타입이 `ThreadPoolTaskExecutor` 인 빈을 **주입처가 없어도** 전부 계측하므로 시계열은 t=0 부터 존재하고, `ThreadPoolExecutor` 는 코어 스레드를 미리 만들지 않으므로 값이 0 이다. **No data 와 0 은 다르다.**\n\n더 나쁜 것은 **A 와 B 의 `mailExecutor` 빈 정의가 `core=15 · max=50 · queue=100` 으로 완전히 동일**하다는 점이다. `pool_core`·`pool_max` 로는 두 회차가 구분되지 않는다 — 구별되는 것은 `pool`(A=0, B=15) 과 `active` 뿐이다.\n\n**⚠️ 회차 전환 시** `$instance` 를 확인할 것 — Blue(8081) ↔ Green(8082) 가 전환 직후 잠시 겹친다.",
+        "content": "### 읽는 법 — 3점 대조군 (A 원시 · B List+BRPOP · C Streams)\n\n| 섹션 | A `4f38b75` | B `8f48f0e` | C `develop` |\n|---|---|---|---|\n| **① 공통 비교축** | ✅ | ✅ | ✅ |\n| **① 실질 백로그(파생)** | ✅ SMTP 인플라이트 | ✅ 큐+인플라이트 | ✅ 미배달+PEL |\n| **② mail_queue_depth** | ⚠️ **0** (안 쓰는 LLEN) | ✅ 진짜 대기열 | ⚠️ **누적** (안 줄어듦) |\n| **② 워커 풀** | ⚠️ **0 으로 나온다** — No data 아님 | ✅ | ✅ |\n| **② 스케줄러 풀** | ✅ pool **1** | ✅ pool **1** | ✅ pool **4** |\n| **③ C 전용** | ❌ | ❌ | ✅ |\n\n**⚠️ A 회차 오독 주의** — A 의 메일은 `rawMailExecutor`(`SimpleAsyncTaskExecutor`)로 나가며 이 타입은 풀이 없어 `executor_*` 가 생성되지 않는다. 그런데 A 의 `AsyncConfig` 에는 **쓰이지 않는** `mailExecutor` 빈이 함께 정의돼 있어 ②의 워커 풀 패널에 **0 으로 평평한 선**이 그려진다. 이것을 \"A 도 풀이 있는데 놀고 있다\"로 읽으면 안 된다 — 실제로는 무제한 스레드로 나가고 있다. **A 회차의 동시성은 `라이브 스레드` 패널 하나로만 판단할 것.**\n\n계측 **등록은 기동 시점**, 스레드 **생성은 첫 submit 시점**으로 서로 별개다. `TaskExecutorMetricsAutoConfiguration` 이 `Map<String, Executor>` 를 훑어 런타임 타입이 `ThreadPoolTaskExecutor` 인 빈을 **주입처가 없어도** 전부 계측하므로 시계열은 t=0 부터 존재하고, `ThreadPoolExecutor` 는 코어 스레드를 미리 만들지 않으므로 값이 0 이다. **No data 와 0 은 다르다.**\n\n더 나쁜 것은 **A 와 B 의 `mailExecutor` 빈 정의가 `core=15 · max=50 · queue=100` 으로 완전히 동일**하다는 점이다. `pool_core`·`pool_max` 로는 두 회차가 구분되지 않는다 — 구별되는 것은 `pool`(A=0, B=15) 과 `active` 뿐이다.\n\n**⚠️ 적체 비교를 `mail_queue_depth` 로 하지 말 것** — 이름은 같지만 A 는 **안 쓰는 LLEN 이라 0**, B 는 진짜 대기열, C 는 `XACK` 해도 **줄지 않는 XLEN 누적**이다. C 를 그대로 B 옆에 놓으면 적체가 0 인데도 끝까지 높게 남아 **개선군이 더 나빠 보인다.** 3점 적체 비교는 **① 실질 백로그(파생)** 패널 하나로만 한다.\n\n**⚠️ 회차 전환 시** `$instance` 를 확인할 것 — Blue(8081) ↔ Green(8082) 가 전환 직후 잠시 겹친다.",
         "mode": "markdown"
       },
       "pluginVersion": "11.0.0",
@@ -1236,6 +1236,102 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "description": "수락 카운터 − 배출 카운터. 둘 다 앱 기동 이후 누적이고 함께 리셋되므로 차이가 곧 «수락됐지만 아직 배출되지 않은 건수» 다.\n\n · A 원시 — SMTP 미완료 인플라이트 (폭증 = 무제한 스레드 붕괴 신호)\n · B List — 큐 대기 + 인플라이트\n · C Stream — 스트림 미배달 + PEL\n\n⚠️ S4 카오스에서는 쓰지 말 것 — 재기동 시 두 카운터가 같이 0 이 된다. S4 판정은 mail_accepted vs Mailpit 수신으로만 한다.\n\n음수가 순간적으로 보이는 것은 스크랩 타이밍 차이다. 지속적 음수는 수락 경로와 XADD 가 1:1 이 아니라는 신호이므로 조사 대상이다.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 26,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(http_server_requests_seconds_count{application=\"$application\", instance=~\"$instance\", uri=\"/api/member/request-code\", status=\"200\"}) - sum(mail_send_result_total{application=\"$application\", instance=~\"$instance\"})",
+          "legendFormat": "실질 백로그 (수락 − 배출)",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "★ 실질 백로그 (파생) — 수락 − 배출",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "A 원시의 붕괴가 GC 때문인지 스레드 경합 때문인지 가르는 데 쓴다. STW 초/초 가 1 에 가까워지면 사실상 멈춘 것이다.",
       "fieldConfig": {
         "defaults": {
@@ -1293,7 +1389,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 35
+        "y": 44
       },
       "id": 15,
       "options": {
@@ -1400,7 +1496,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 35
+        "y": 44
       },
       "id": 16,
       "options": {
@@ -1519,7 +1615,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 35
+        "y": 44
       },
       "id": 17,
       "options": {
@@ -1559,7 +1655,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 51
       },
       "id": 18,
       "panels": [],
@@ -1571,7 +1667,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "B1. B 는 LLEN(email_queue), C 는 XLEN(email_stream). A 원시는 큐가 없고 MailQueueMetrics 도 미등록이라 시계열 자체가 없다 — 그 부재가 곧 \"적체를 볼 수 없었다\" 는 증거다. 도착률이 배출률을 넘으면 여기가 선형으로 올라간다.",
+      "description": "B1. 같은 지표 이름이지만 회차마다 재는 대상이 다르다.\n\n · A 원시 — 쓰지 않는 email_queue 의 LLEN. 없는 키라 항상 0 (No data 아님)\n · B List — 진짜 대기열. 배출되면 줄어든다\n · C Stream — XLEN 누적. XACK 해도 줄지 않아 도착량만큼만 올라간다 (MAX_LEN 10,000 링버퍼에서 잘림)\n\n→ 세 선을 같은 의미로 비교하지 말 것. 적체 비교는 «★ 실질 백로그 (파생)» 패널로 한다.\n\nXPENDING 도 적체가 아니다 — count(1) 로 읽으므로 워커 수가 상한이다.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1629,7 +1725,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 52
       },
       "id": 19,
       "options": {
@@ -1661,7 +1757,7 @@
           "refId": "A"
         }
       ],
-      "title": "★ 큐 적체 — 도착률 > 배출률 이면 치솟는다",
+      "title": "원시 지표 mail_queue_depth — ⚠ 회차마다 재는 것이 다르다",
       "type": "timeseries"
     },
     {
@@ -1743,7 +1839,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 52
       },
       "id": 20,
       "options": {
@@ -1887,7 +1983,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 62
       },
       "id": 25,
       "options": {
@@ -1950,7 +2046,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 71
       },
       "id": 21,
       "panels": [],
@@ -2020,7 +2116,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 63
+        "y": 72
       },
       "id": 22,
       "options": {
@@ -2134,7 +2230,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 63
+        "y": 72
       },
       "id": 23,
       "options": {
@@ -2248,7 +2344,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 63
+        "y": 72
       },
       "id": 24,
       "options": {
