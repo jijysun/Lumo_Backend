@@ -1,5 +1,5 @@
 import { sleep } from 'k6';
-import { requestCode, mailpitClear, reportProcessing, snapshotCounters, RUN_ID } from './lib/lumo.js';
+import { requestCode, mailpitClear, reportProcessing, snapshotCounters, summaryFiles, RUN_ID } from './lib/lumo.js';
 
 /*
  * S1 — 스파이크 테스트 (수락 계층)
@@ -81,6 +81,20 @@ export default function () {
     requestCode();
     // VU 1개 ≈ 초당 1요청. VU 수를 그대로 도착률로 읽을 수 있어 해석이 쉽다.
     sleep(1);
+}
+
+/*
+ * 회차 로그를 dev_notes/${프로젝트}/result 에 자동 저장한다 (CLAUDE_INIT 테스트 절).
+ * 래더(계단) 회차는 단일 VU 값이 없으므로 load 를 `ladder` 로 남긴다.
+ */
+export function handleSummary(data) {
+    return summaryFiles(data, {
+        load: SINGLE_VUS > 0 ? `${SINGLE_VUS}vu` : 'ladder',
+        duration: HOLD,
+        scenario: SINGLE_VUS > 0
+            ? `스파이크 단일 레벨 ${SINGLE_VUS}VU / ${HOLD}`
+            : '스파이크 래더 (100/200/400/600 VU)',
+    });
 }
 
 export function teardown(base) {

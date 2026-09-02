@@ -1,4 +1,4 @@
-import { requestCode, mailpitClear, reportProcessing, snapshotCounters, RUN_ID } from './lib/lumo.js';
+import { requestCode, mailpitClear, reportProcessing, snapshotCounters, summaryFiles, RUN_ID } from './lib/lumo.js';
 
 /*
  * S2 / S3 — 스트레스 테스트 (처리 계층)
@@ -21,6 +21,7 @@ import { requestCode, mailpitClear, reportProcessing, snapshotCounters, RUN_ID }
 
 const RATE = Number(__ENV.RATE || 50);
 const DURATION = __ENV.DURATION || '5m';
+const PRE_VUS = Number(__ENV.PRE_VUS || Math.max(50, RATE));
 
 export const options = {
     scenarios: {
@@ -30,8 +31,12 @@ export const options = {
             timeUnit: '1s',
             duration: DURATION,
             // 도착률을 지키지 못하면 k6 가 경고한다. 그 경고 자체가 "수락 계층이 밀렸다" 는 신호다.
-            preAllocatedVUs: Number(__ENV.PRE_VUS || Math.max(50, RATE)),
-            maxVUs: Number(__ENV.MAX_VUS || RATE * 10),
+            preAllocatedVUs: PRE_VUS,
+            /*
+             * maxVUs 는 preAllocatedVUs 보다 작을 수 없다 — k6 가 기동을 거부한다.
+             * RATE*10 만 쓰면 RATE < 5 에서 10 < 50 이 되어 스크립트가 아예 뜨지 않았다.
+             */
+            maxVUs: Math.max(PRE_VUS, Number(__ENV.MAX_VUS || RATE * 10)),
         },
     },
     /*
@@ -75,4 +80,19 @@ export function teardown(base) {
      * 곧 "밀린 양" 이다 — 도착률이 배출률을 넘었다면 이 값이 급격히 커진다.
      */
     reportProcessing(`stress ${RATE}/s ${DURATION}`, base);
+}
+
+/*
+ * 회차 로그를 dev_notes/${프로젝트}/result 에 자동 저장한다 (CLAUDE_INIT 테스트 절).
+ * 손으로 콘솔을 긁어 붙이면 회차가 쌓일수록 누락·오타가 반드시 생긴다.
+ *
+ * ⚠️ k6 는 디렉터리를 만들어 주지 않는다. RESULT_DIR 경로가 없으면 쓰기가 실패한다.
+ *    기본값은 레포 루트 기준 상대경로이므로 반드시 <b>레포 루트에서</b> 실행할 것.
+ */
+export function handleSummary(data) {
+    return summaryFiles(data, {
+        load: `${RATE}rps`,
+        duration: DURATION,
+        scenario: `스트레스 (constant-arrival-rate ${RATE}/s ${DURATION})`,
+    });
 }

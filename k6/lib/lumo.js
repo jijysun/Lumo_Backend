@@ -246,6 +246,153 @@ export function waitForDrain(timeoutSec, stallSec) {
     }
 }
 
+/*
+ * ── 회차 결과 파일 저장 ────────────────────────────────────────────────────
+ *
+ * k6 는 VU 마다 별도 런타임을 쓰지만 setup / teardown / handleSummary 는 <b>같은 런타임</b>
+ * 에서 돈다. 그래서 teardown 이 만든 텍스트를 모듈 변수에 담아 handleSummary 로 넘길 수 있다.
+ * (VU 코드에서는 이 값이 보이지 않는다 — 보일 필요도 없다)
+ *
+ * handleSummary 안에서는 http 를 쓸 수 없으므로, Redis·Mailpit 을 조회하는 처리 계층 블록은
+ * teardown 시점에 미리 만들어 두어야 한다.
+ */
+let processingReport = '';
+
+function pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+/** `20260902_1743` 형태. CLAUDE_INIT 의 파일명 규칙에 쓴다. */
+function stamp(d) {
+    return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate())
+        + '_' + pad2(d.getHours()) + pad2(d.getMinutes());
+}
+
+function isoLocal(d) {
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+        + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+}
+
+/**
+ * CLAUDE_INIT 규칙의 파일명을 만든다 — `${년월일}_${시간}_${부하}_${지속}`.
+ *
+ * @param load     `500rps` (도착률 기반) 또는 `200vu` (VU 기반)
+ * @param duration `1m` 처럼 지속시간 표기
+ */
+export function buildRunName(load, duration, startedAt) {
+    return stamp(startedAt) + '_' + load + '_' + duration;
+}
+
+/** k6 요약 객체를 사람이 읽는 텍스트로 만든다. 외부 jslib 에 의존하지 않는다(오프라인 안전). */
+function renderSummary(data) {
+    const lines = [];
+    const ms = function (v) { return (Math.round(v * 100) / 100) + 'ms'; };
+
+    const checks = data.metrics && data.metrics.checks;
+    if (checks && checks.values) {
+        const p = checks.values.passes || 0;
+        const f = checks.values.fails || 0;
+        lines.push('CHECKS  성공 ' + p + ' / 실패 ' + f
+            + '  (' + ((p / Math.max(1, p + f)) * 100).toFixed(2) + '%)');
+        lines.push('');
+    }
+
+    const names = Object.keys(data.metrics).sort();
+    lines.push('METRICS');
+    for (let i = 0; i < names.length; i++) {
+        const n = names[i];
+        const m = data.metrics[n];
+        const v = m.values || {};
+        let body;
+
+        if (m.type === 'counter') {
+            body = 'count=' + v.count + '  rate=' + (v.rate || 0).toFixed(4) + '/s';
+        } else if (m.type === 'rate') {
+            body = (v.rate * 100).toFixed(2) + '%  (passes=' + v.passes + ' fails=' + v.fails + ')';
+        } else if (m.type === 'gauge') {
+            body = 'value=' + v.value + '  min=' + v.min + '  max=' + v.max;
+        } else { // trend
+            const u = m.contains === 'time' ? ms : function (x) { return String(Math.round(x * 100) / 100); };
+            body = 'avg=' + u(v.avg) + '  min=' + u(v.min) + '  med=' + u(v.med)
+                + '  max=' + u(v.max) + '  p90=' + u(v['p(90)']) + '  p95=' + u(v['p(95)']);
+        }
+
+        let line = '  ' + n;
+        while (line.length < 34) line += ' ';
+        lines.push(line + ': ' + body);
+
+        // 임계값 통과 여부는 회차 유효성 판정에 직결되므로 함께 남긴다.
+        if (m.thresholds) {
+            const tn = Object.keys(m.thresholds);
+            for (let j = 0; j < tn.length; j++) {
+                lines.push('      threshold ' + tn[j] + ' → '
+                    + (m.thresholds[tn[j]].ok ? 'PASS' : 'FAIL'));
+            }
+        }
+    }
+    return lines.join('\n');
+}
+
+/**
+ * handleSummary 가 돌려줄 파일 맵을 만든다.
+ *
+ * <p>결과는 CLAUDE_INIT 규칙에 따라 `dev_notes/${프로젝트}/result/` 아래에 남긴다.
+ * k6 는 <b>디렉터리를 만들어 주지 않으므로</b> 경로가 없으면 쓰기가 실패한다.
+ *
+ * <p>⚠️ `stdout` 키를 돌려주면 k6 기본 요약이 <b>대체</b>된다. 그래서 기본 요약을 잃지 않도록
+ * 직접 렌더링한 요약을 같이 넣는다.
+ *
+ * @param meta `{ load: '500rps', duration: '1m', scenario: 'S2 스트레스' }`
+ */
+export function summaryFiles(data, meta) {
+    const endedAt = new Date();
+    const durMs = (data.state && data.state.testRunDurationMs) || 0;
+    const startedAt = new Date(endedAt.getTime() - durMs);
+
+    const name = buildRunName(meta.load, meta.duration, startedAt);
+    const dir = __ENV.RESULT_DIR || '../dev_notes/Lumo_Backend/result';
+    const base = dir + '/' + name;
+
+    const head = [
+        '='.repeat(78),
+        ' 회차: ' + name,
+        ' 시나리오: ' + (meta.scenario || '-') + '   RUN_ID: ' + RUN_ID,
+        ' 대상: ' + BASE + '   Mailpit: ' + MAILPIT,
+        '',
+        ' 시작: ' + isoLocal(startedAt),
+        ' 종료: ' + isoLocal(endedAt),
+        ' 소요: ' + (durMs / 1000).toFixed(1) + 's',
+        '',
+        ' ※ Grafana 시간 범위를 위 시작~종료로 맞출 것. 부하 구간 밖이 섞이면 평균이 희석된다.',
+        ' ※ 대시보드 캡쳐는 grafana_dashboards_capture/' + name + ' - 1~4.png 로 저장한다.',
+        '='.repeat(78),
+        '',
+    ].join('\n');
+
+    const tail = [
+        '',
+        '',
+        '='.repeat(78),
+        ' 분석',
+        '='.repeat(78),
+        '(여기에 해석을 적는다 — 무엇이 병목이었고, 무엇이 이전 회차와 달라졌는가)',
+        '',
+    ].join('\n');
+
+    const text = head + processingReport + '\n\n' + renderSummary(data) + tail;
+
+    const out = {};
+    out[base + '.txt'] = text;
+    out[base + '.json'] = JSON.stringify(data, null, 2);
+    out['stdout'] = processingReport + '\n\n' + renderSummary(data) + '\n\n'
+        + '── 저장 ' + '─'.repeat(60) + '\n'
+        + '  시작 ' + isoLocal(startedAt) + '  →  종료 ' + isoLocal(endedAt)
+        + '   (' + (durMs / 1000).toFixed(1) + 's)\n'
+        + '  ' + base + '.txt\n'
+        + '  ' + base + '.json\n'
+        + '  캡쳐 파일명: ' + name + ' - 1.png ~ - 4.png\n'
+        + '─'.repeat(68) + '\n';
+    return out;
+}
+
 /**
  * 회차 종료 후 공통 리포트. 처리 계층의 결과는 전부 여기서 나온다.
  *
@@ -278,7 +425,8 @@ export function reportProcessing(label, base) {
         ? (drain.drained / drain.drainSeconds).toFixed(1) + ' 건/초'
         : '측정 불가 (부하 종료 시점에 이미 배출 완료 — RATE 를 올릴 것)';
 
-    console.log(`
+    // handleSummary 로 넘기려면 문자열로 들고 있어야 한다 (거기서는 http 조회가 불가능하다).
+    processingReport = `
 ────────────── 처리 계층 결과 (${label}) ──────────────
   발송 성공(회차)  ${processed}
   실패 일시/영구   ${failTransient} / ${failPermanent}
@@ -297,7 +445,9 @@ export function reportProcessing(label, base) {
 
   ※ 유실 판정: Mailpit 수신(${received}) >= 아래 요약의 mail_accepted 여야 한다
     (at-least-once 이므로 재시도로 인한 중복은 허용된다)
-──────────────────────────────────────────────────`);
+──────────────────────────────────────────────────`;
+
+    console.log(processingReport);
 
     return {
         processed: processed,
