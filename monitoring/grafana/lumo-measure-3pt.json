@@ -1236,7 +1236,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "수락 카운터 − 배출 카운터. 둘 다 앱 기동 이후 누적이고 함께 리셋되므로 차이가 곧 «수락됐지만 아직 배출되지 않은 건수» 다.\n\n · A 원시 — SMTP 미완료 인플라이트 (폭증 = 무제한 스레드 붕괴 신호)\n · B List — 큐 대기 + 인플라이트\n · C Stream — 스트림 미배달 + PEL\n\n⚠️ S4 카오스에서는 쓰지 말 것 — 재기동 시 두 카운터가 같이 0 이 된다. S4 판정은 mail_accepted vs Mailpit 수신으로만 한다.\n\n음수가 순간적으로 보이는 것은 스크랩 타이밍 차이다. 지속적 음수는 수락 경로와 XADD 가 1:1 이 아니라는 신호이므로 조사 대상이다.",
+      "description": "수락 카운터 − 배출 카운터. 둘 다 앱 기동 이후 누적이고 함께 리셋되므로 차이가 곧 «수락됐지만 아직 배출되지 않은 건수» 다.\n\n · A 원시 — SMTP 미완료 인플라이트 (폭증 = 무제한 스레드 붕괴 신호)\n · B List — 큐 대기 + 인플라이트\n · C Stream — 스트림 미배달 + PEL\n\n⚠️ 부하 중에도 0 이 정상일 수 있다. 도착률이 배출 상한보다 낮으면 Little's Law 상 인플라이트가 1 건 미만이라 스크랩마다 0 이 찍힌다 — 20260902 파일럿(50/s · 건당 5.11ms)이 L = 0.26 이었다.\n\n«진짜 0» 과 «쿼리 고장» 은 오른쪽 축의 점선(검산용) 두 개로 구분한다. 둘이 나란히 계단으로 올라가면 쿼리는 정상이고 부하가 낮은 것이다. 한쪽만 올라가거나 둘 다 없으면 라벨(uri · status)이 틀린 것이다.\n\n첫 요청 전에는 아무것도 그려지지 않는다 — http_server_requests 시계열은 uri·status 조합마다 최초 요청 시점에 생성되기 때문이다.\n\n⚠️ S4 카오스에서는 쓰지 말 것 — 재기동 시 두 카운터가 같이 0 이 된다. S4 판정은 mail_accepted vs Mailpit 수신으로만 한다.\n\n음수가 순간적으로 보이는 것은 스크랩 타이밍 차이다. 지속적 음수는 수락 경로와 XADD 가 1:1 이 아니라는 신호이므로 조사 대상이다.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1244,7 +1244,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
@@ -1286,7 +1286,38 @@
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*검산용.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    6,
+                    6
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 9,
@@ -1322,6 +1353,28 @@
           "legendFormat": "실질 백로그 (수락 − 배출)",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(http_server_requests_seconds_count{application=\"$application\", instance=~\"$instance\", uri=\"/api/member/request-code\", status=\"200\"})",
+          "legendFormat": "수락 누적 (검산용)",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(mail_send_result_total{application=\"$application\", instance=~\"$instance\"})",
+          "legendFormat": "배출 누적 (검산용)",
+          "range": true,
+          "refId": "C"
         }
       ],
       "title": "★ 실질 백로그 (파생) — 수락 − 배출",
