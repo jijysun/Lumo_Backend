@@ -348,7 +348,19 @@ export function summaryFiles(data, meta) {
     const startedAt = new Date(endedAt.getTime() - durMs);
 
     const name = buildRunName(meta.load, meta.duration, startedAt);
-    const dir = __ENV.RESULT_DIR || '../dev_notes/Lumo_Backend/result';
+
+    /*
+     * 저장 경로는 머신마다 다르다 (데스크탑 ↔ 노트북). 세 단계로 찾는다.
+     *
+     *   ① -e RESULT_DIR=...     회차 단위 임시 지정
+     *   ② LUMO_RESULT_DIR       머신 단위 고정. k6 는 시스템 환경변수를 그대로 읽으므로
+     *                           ~/.bashrc 에 export 해두면 -e 없이도 잡힌다 (실측 확인)
+     *   ③ 상대경로 기본값        레포와 dev_notes 가 형제 폴더일 때만 맞는다
+     *
+     * ⚠️ k6 는 디렉터리를 만들어 주지 않는다. 경로가 없으면 이 회차의 로그가 통째로 사라진다 —
+     *    아래 stdout 에 실제 경로를 찍으므로 회차 종료 시 눈으로 확인할 것.
+     */
+    const dir = __ENV.RESULT_DIR || __ENV.LUMO_RESULT_DIR || '../dev_notes/Lumo_Backend/result';
     const base = dir + '/' + name;
 
     const head = [
